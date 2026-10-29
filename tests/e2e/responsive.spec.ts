@@ -164,6 +164,8 @@ test("search results and settings stay inside the window", async ({ newTab }) =>
     { width: 760, height: 900 },
     { width: 760, height: 700 },
     { width: 600, height: 600 },
+    { width: 400, height: 600 },
+    { width: 320, height: 600 },
     { width: 900, height: 900 },
     { width: 1440, height: 900 },
   ]) {

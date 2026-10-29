@@ -816,6 +816,10 @@ input {
   position: absolute;
   top: calc(100% + 10px);
   inset-inline: 0;
+  display: flex;
+  flex-direction: column;
+  /* The cap is on the popover, so a footer that wraps onto more lines shrinks the list instead. */
+  max-height: clamp(216px, calc(100dvh - 204px), 526px);
   padding: 8px;
   border-radius: var(--radius-panel);
   background: var(--spotlight-results-fill);
@@ -830,7 +834,6 @@ input {
 }
 
 .spotlight__listbox {
-  max-height: clamp(160px, calc(100dvh - 260px), 470px);
   overflow-y: auto;
 }
 
@@ -1474,9 +1477,9 @@ input {
     max-height: 40vh;
   }
 
-  /* The clock stacks above the search here, so the results start about 110px lower. */
-  .spotlight__listbox {
-    max-height: clamp(160px, calc(100dvh - 340px), 470px);
+  /* The clock stacks above the search here, so the popover starts lower. */
+  .spotlight__popover {
+    max-height: clamp(216px, calc(100dvh - 284px), 526px);
   }
 
   .top,
