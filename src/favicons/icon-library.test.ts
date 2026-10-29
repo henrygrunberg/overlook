@@ -32,6 +32,7 @@ function fakeIconChannel() {
 const sendMessage = vi.fn(() => Promise.resolve());
 
 beforeEach(() => {
+  fakeIconChannel();
   vi.stubGlobal("chrome", { runtime: { sendMessage } });
   stored.splice(0, stored.length, {
     origin: FRESH,
@@ -150,6 +151,25 @@ describe("IconLibrary", () => {
       fullBleed: true,
     });
     expect(createObjectURL).toHaveBeenCalledTimes(2);
+  });
+
+  it("shows an icon the service worker saved while the cache was being read", async () => {
+    const broadcast = fakeIconChannel();
+    readIcon.mockResolvedValue({
+      origin: FRESH,
+      status: "ok",
+      image: new Blob(["new icon"]),
+      fullBleed: false,
+      fetchedAt: Date.now(),
+    });
+    const loading = IconLibrary.load();
+    broadcast({ origin: FRESH });
+    const icons = await loading;
+    const onUpdate = vi.fn();
+    icons.watch(onUpdate);
+    await vi.waitFor(() => {
+      expect(onUpdate).toHaveBeenCalledExactlyOnceWith(FRESH);
+    });
   });
 
   it("ignores icon broadcasts without an origin", async () => {

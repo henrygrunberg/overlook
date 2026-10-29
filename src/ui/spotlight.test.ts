@@ -2,9 +2,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Folder } from "../bookmarks/library";
 import type { SearchResults } from "../search/search-index";
 import { bookmarkNamed, folderNamed } from "../test/sample-library";
-import { Spotlight } from "./spotlight";
+import { Spotlight, type SpotlightDeps } from "./spotlight";
 
-function mountSpotlight(results: SearchResults) {
+function mountSpotlight(
+  results: SearchResults,
+  onOpenBookmark: SpotlightDeps["onOpenBookmark"] = () => undefined,
+) {
   vi.stubGlobal("chrome", {
     runtime: { getURL: (path: string) => `chrome-extension://overlook-test${path}` },
   });
@@ -19,7 +22,7 @@ function mountSpotlight(results: SearchResults) {
       canPin: true,
     }),
     onOpenFolder: () => undefined,
-    onOpenBookmark: () => undefined,
+    onOpenBookmark,
     onSearchWeb: () => undefined,
   });
   document.body.replaceChildren(spotlight.element);
@@ -29,8 +32,8 @@ function mountSpotlight(results: SearchResults) {
     input.value = text;
     input.dispatchEvent(new Event("input"));
   };
-  const keyDown = (key: string) => {
-    input.dispatchEvent(new KeyboardEvent("keydown", { key, cancelable: true }));
+  const keyDown = (key: string, init: KeyboardEventInit = {}) => {
+    input.dispatchEvent(new KeyboardEvent("keydown", { key, cancelable: true, ...init }));
   };
   spotlight.focus();
   return { element: spotlight.element, input, type, keyDown };
@@ -59,6 +62,30 @@ describe("Spotlight", () => {
 
     keyDown("Backspace");
     expect(input.getAttribute("aria-label")).toBe("Search bookmarks, folders or the web");
+  });
+
+  it("stays in the folder while a held Backspace clears the search", () => {
+    const { input, type, keyDown } = mountSpotlight({
+      folders: [hit(folderNamed("Dashboards"))],
+      bookmarks: [],
+    });
+    type("dash");
+    keyDown("Tab");
+    keyDown("Backspace", { repeat: true });
+    expect(input.getAttribute("aria-label")).toBe("Search in Dashboards");
+  });
+
+  it("opens a background tab once while Ctrl+Enter is held", () => {
+    const opened = vi.fn();
+    const { type, keyDown } = mountSpotlight(
+      { folders: [], bookmarks: [hit(bookmarkNamed("GitHub"))] },
+      opened,
+    );
+    type("git");
+    keyDown("Enter", { ctrlKey: true });
+    keyDown("Enter", { ctrlKey: true, repeat: true });
+    keyDown("Enter", { ctrlKey: true, repeat: true });
+    expect(opened).toHaveBeenCalledExactlyOnceWith(expect.anything(), "background-tab");
   });
 
   it("keeps key hints out of option names and announces the results", () => {

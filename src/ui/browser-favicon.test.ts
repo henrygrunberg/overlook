@@ -39,7 +39,7 @@ class FakeOffscreenCanvas {
 
 async function loadFavicon() {
   vi.resetModules();
-  return import("./favicon");
+  return import("./browser-favicon");
 }
 
 function tileImage(faviconUrl: (pageUrl: string) => string, pageUrl: string): HTMLImageElement {

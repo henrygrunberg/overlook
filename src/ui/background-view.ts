@@ -1,9 +1,9 @@
 import type { BackgroundChoice } from "../settings/settings";
 import { warn } from "../log";
-import { h } from "../ui/dom";
+import { h } from "./dom";
 import { currentFrame, loadDynamicWallpaper } from "../wallpaper/dynamic-wallpaper";
-import { readCustomBackground } from "./custom-background";
-import { DEFAULT_PHOTO, photoSrc } from "./photos";
+import { readCustomBackground } from "../backgrounds/custom-background";
+import { DEFAULT_PHOTO, photoSrc } from "../backgrounds/photos";
 
 const DYNAMIC_UPDATE_MS = 60_000;
 
@@ -11,6 +11,8 @@ export class BackgroundView {
   private readonly layers: readonly [HTMLImageElement, HTMLImageElement];
   private visibleLayer: 0 | 1 = 0;
   private requestedSrc: string | null = null;
+  /** The result for requestedSrc: a second request while it decodes must share its outcome. */
+  private requested: Promise<boolean> = Promise.resolve(true);
   private shownSrc: string | null = null;
   private objectUrl: string | null = null;
   private dynamicTimer: number | undefined;
@@ -86,9 +88,15 @@ export class BackgroundView {
   }
 
   /** False only when the image can't be decoded; a superseded image counts as handled. */
-  private async show(src: string, kind: string): Promise<boolean> {
-    if (src === this.requestedSrc) return true;
-    this.requestedSrc = src;
+  private show(src: string, kind: string): Promise<boolean> {
+    if (src !== this.requestedSrc) {
+      this.requestedSrc = src;
+      this.requested = this.load(src, kind);
+    }
+    return this.requested;
+  }
+
+  private async load(src: string, kind: string): Promise<boolean> {
     const loader = new Image();
     loader.src = src;
     try {
@@ -98,6 +106,7 @@ export class BackgroundView {
       if (this.requestedSrc === src) {
         // A fallback to the image still on screen must not decode it again and cross-fade it.
         this.requestedSrc = this.shownSrc;
+        this.requested = Promise.resolve(true);
         if (this.root.dataset.state !== "ready") this.root.dataset.state = "fallback";
       }
       return false;

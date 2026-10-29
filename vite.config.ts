@@ -17,7 +17,7 @@ export default defineConfig({
     rolldownOptions: {
       input: {
         newtab: fromRoot("src/newtab.html"),
-        background: fromRoot("src/background.ts"),
+        background: fromRoot("src/service-worker.ts"),
         "focus-step": fromRoot("src/focus-step.ts"),
       },
       output: {

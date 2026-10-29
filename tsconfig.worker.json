@@ -5,5 +5,5 @@
     "lib": ["ES2024", "WebWorker"],
     "types": ["chrome"]
   },
-  "include": ["src/background.ts"]
+  "include": ["src/service-worker.ts"]
 }

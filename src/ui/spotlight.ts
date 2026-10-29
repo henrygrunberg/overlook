@@ -335,6 +335,7 @@ export class Spotlight {
     this.markActive();
   }
 
+  // A held key repeats: the arrows keep moving, but opening, entering or leaving a folder happen once.
   private onKeyDown(event: KeyboardEvent): void {
     // While an input method is composing (Japanese, Chinese, …) these keys belong to it.
     if (event.isComposing) return;
@@ -350,17 +351,18 @@ export class Spotlight {
         break;
       case "Enter":
         event.preventDefault();
-        this.activate(this.activeIndex, dispositionFor(event));
+        if (!event.repeat) this.activate(this.activeIndex, dispositionFor(event));
         break;
       case "Tab":
         if (active?.kind === "folder" && !event.shiftKey) {
           event.preventDefault();
+          if (event.repeat) break;
           this.input.value = "";
           this.setScope(active.folder);
         }
         break;
       case "Backspace":
-        if (this.input.value === "" && this.scope) {
+        if (this.input.value === "" && this.scope && !event.repeat) {
           event.preventDefault();
           this.setScope(null);
         }

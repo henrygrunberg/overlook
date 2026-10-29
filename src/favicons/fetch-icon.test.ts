@@ -65,6 +65,16 @@ function fakeSite(routes: Record<string, Response | "offline">) {
   return { fetchImpl, requested };
 }
 
+// Enough of a PNG for its declared size to be read; the decoder itself is stubbed.
+function pngHeader(width: number, height: number): Uint8Array<ArrayBuffer> {
+  const bytes = new Uint8Array(24);
+  bytes.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52]);
+  const header = new DataView(bytes.buffer);
+  header.setUint32(16, width);
+  header.setUint32(20, height);
+  return bytes;
+}
+
 const candidateUrls = async (origin: string, fetchImpl: typeof fetch) => {
   const candidates = await discoverIcons(origin, fetchImpl);
   return candidates === "unreachable" ? candidates : candidates.map((candidate) => candidate.url);
@@ -286,6 +296,35 @@ describe("discoverIcons", () => {
     ]);
   });
 
+  it("ignores the icons of a login page the site redirects to", async () => {
+    const { fetchImpl, requested } = fakeSite({
+      [`${SITE}/`]: respond(
+        `<link rel="apple-touch-icon" sizes="180x180" href="/touch-icon.png">
+        <link rel="manifest" href="/manifest.json">`,
+        HTML,
+        "https://login.example.net/sso?app=wiki",
+      ),
+    });
+    expect(await candidateUrls(SITE, fetchImpl)).toEqual([
+      `${SITE}/apple-touch-icon.png`,
+      `${SITE}/favicon.ico`,
+    ]);
+    expect(requested).toEqual([`follow ${SITE}/`]);
+  });
+
+  it("keeps the icons of a page the site redirects to on its www host", async () => {
+    const { fetchImpl } = fakeSite({
+      [`${SITE}/`]: respond(
+        '<link rel="icon" sizes="192x192" href="/icon.png">',
+        HTML,
+        "https://www.example.example.com/start",
+      ),
+    });
+    expect(await candidateUrls(SITE, fetchImpl)).toContain(
+      "https://www.example.example.com/icon.png",
+    );
+  });
+
   it("resolves manifest icons against the manifest's address after redirects", async () => {
     const { fetchImpl } = fakeSite({
       [`${SITE}/`]: respond('<link rel="manifest" href="/manifest.json">', HTML),
@@ -326,7 +365,7 @@ describe("fetchBestIcon", () => {
     const intranet = "http://10.0.0.20:3000";
     const { decode } = stubDecoder();
     const { fetchImpl } = fakeSite({
-      [`${intranet}/favicon.ico`]: respond("png", PNG, "http://10.0.0.21/favicon.png"),
+      [`${intranet}/favicon.ico`]: respond(pngHeader(64, 64), PNG, "http://10.0.0.21/favicon.png"),
     });
     expect(await fetchBestIcon(intranet, fetchImpl)).not.toBe("missing");
     expect(decode).toHaveBeenCalledOnce();
@@ -343,17 +382,28 @@ describe("fetchBestIcon", () => {
 });
 
 describe("normalizeIcon", () => {
-  const bytes = new Uint8Array([1, 2, 3]);
+  const bytes = pngHeader(64, 64);
 
   it("accepts images up to 4096 pixels across", async () => {
     stubDecoder({ width: 4096, height: 4096 });
-    expect(await normalizeIcon(bytes, "image/png")).toMatchObject({ sourceSize: 4096 });
+    expect(await normalizeIcon(pngHeader(4096, 4096), "image/png")).toMatchObject({
+      sourceSize: 4096,
+    });
+  });
+
+  it.each([
+    ["declares more than 4096 pixels across", pngHeader(16000, 16000)],
+    ["is in a format whose size it can't read", new Uint8Array([1, 2, 3])],
+  ])("skips an image that %s without decoding it", async (_label, image) => {
+    const { decode } = stubDecoder();
+    expect(await normalizeIcon(image, "image/png")).toBeNull();
+    expect(decode).not.toHaveBeenCalled();
   });
 
   it.each([
     ["too large", { width: 4097, height: 64 }],
     ["too small", { width: 31, height: 64 }],
-  ])("rejects an image that is %s, and frees it", async (_label, size) => {
+  ])("rejects an image that decodes %s, and frees it", async (_label, size) => {
     const { close, createCanvas } = stubDecoder(size);
     expect(await normalizeIcon(bytes, "image/png")).toBeNull();
     expect(close).toHaveBeenCalledOnce();

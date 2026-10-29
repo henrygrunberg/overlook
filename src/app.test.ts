@@ -7,7 +7,7 @@ import { SAMPLE_TREE, bookmarkNamed, folderNamed } from "./test/sample-library";
 import type { SettingsContext } from "./ui/settings-dialog";
 
 const appliedBackgrounds = vi.hoisted(() => [] as BackgroundChoice[]);
-vi.mock("./backgrounds/background-view", () => ({
+vi.mock("./ui/background-view", () => ({
   BackgroundView: class {
     apply(choice: BackgroundChoice) {
       appliedBackgrounds.push(choice);
@@ -75,10 +75,14 @@ function fakeChrome(settings: Partial<Settings>, initialTree: readonly BookmarkN
     },
     runtime: { getURL: (path: string) => `chrome-extension://overlook-test/${path}` },
   });
+  const changeBookmarks = (changed: readonly BookmarkNode[]) => {
+    tree = changed;
+    for (const listener of bookmarkListeners) listener();
+  };
   return {
+    changeBookmarks,
     moveBookmarks: async (moved: readonly BookmarkNode[]) => {
-      tree = moved;
-      for (const listener of bookmarkListeners) listener();
+      changeBookmarks(moved);
       await vi.advanceTimersByTimeAsync(500);
     },
   };
@@ -191,17 +195,31 @@ describe("startApp", () => {
     expect([tileOf("11"), tileOf("12")]).toEqual(["G", "C"]);
   });
 
+  function treeWithTrailGuide(): BookmarkNode[] {
+    const [root] = SAMPLE_TREE;
+    const bar = root?.children?.[0];
+    if (!root || !bar) throw new Error("Unexpected sample tree");
+    const guide = { id: "guide", title: "Trail guide", url: "https://guide.example.com/" };
+    return [{ ...root, children: [{ ...bar, children: [...(bar.children ?? []), guide] }] }];
+  }
+
   it("searches the bookmarks as they are after a change", async () => {
     const chromeFake = await start();
     searchFor("trail");
     expect(resultTitles()).toEqual(["Trail map"]);
 
-    const [root] = SAMPLE_TREE;
-    const bar = root?.children?.[0];
-    if (!root || !bar) throw new Error("Unexpected sample tree");
-    const guide = { id: "guide", title: "Trail guide", url: "https://guide.example.com/" };
-    const children = [...(bar.children ?? []), guide];
-    await chromeFake.moveBookmarks([{ ...root, children: [{ ...bar, children }] }]);
+    await chromeFake.moveBookmarks(treeWithTrailGuide());
+    searchFor("trail");
+    expect(resultTitles()).toEqual(["Trail guide", "Trail map"]);
+  });
+
+  it("picks up a bookmark change made while the page was starting", async () => {
+    const chromeFake = fakeChrome({ focusSearchOnOpen: false }, SAMPLE_TREE);
+    mountPage();
+    const started = startApp(await SettingsStore.load());
+    chromeFake.changeBookmarks(treeWithTrailGuide());
+    await started;
+    await vi.advanceTimersByTimeAsync(500);
     searchFor("trail");
     expect(resultTitles()).toEqual(["Trail guide", "Trail map"]);
   });

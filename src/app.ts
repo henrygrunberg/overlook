@@ -1,4 +1,4 @@
-import { BackgroundView } from "./backgrounds/background-view";
+import { BackgroundView } from "./ui/background-view";
 import {
   buildLibrary,
   type Bookmark,
@@ -21,18 +21,11 @@ import {
 } from "./settings/settings";
 import type { SettingsStore } from "./settings/settings-store";
 import { mountClock } from "./ui/clock";
-import { scrollBehavior } from "./ui/motion";
 import { h } from "./ui/dom";
 import { folderColors, type FolderColors } from "./ui/folder-colors";
 import { refreshIconTiles, type BookmarkDecor } from "./ui/link-card";
 import { openUrl, searchWeb, type Disposition } from "./ui/navigation";
-import {
-  folderSections,
-  renderPanel,
-  sectionElementId,
-  type PanelAction,
-  type PanelView,
-} from "./ui/panel";
+import { renderPanel, revealFolder, type PanelAction, type PanelView } from "./ui/panel";
 import { bindPanelEvents } from "./ui/panel-events";
 import { SettingsDialog } from "./ui/settings-dialog";
 import { bindShortcuts } from "./ui/shortcuts";
@@ -60,6 +53,29 @@ async function loadUsage(): Promise<UsageStore> {
     warn("read usage history; Frequent starts empty", error);
     return UsageStore.inMemory();
   }
+}
+
+// Called before the bookmarks are read, so a change made while the page starts isn't missed.
+function watchBookmarks(): (onChange: () => void) => void {
+  let handler: (() => void) | undefined;
+  let changedBeforeHandler = false;
+  for (const event of [
+    chrome.bookmarks.onCreated,
+    chrome.bookmarks.onRemoved,
+    chrome.bookmarks.onChanged,
+    chrome.bookmarks.onMoved,
+    chrome.bookmarks.onChildrenReordered,
+    chrome.bookmarks.onImportEnded,
+  ]) {
+    event.addListener(() => {
+      if (handler) handler();
+      else changedBeforeHandler = true;
+    });
+  }
+  return (onChange) => {
+    handler = onChange;
+    if (changedBeforeHandler) onChange();
+  };
 }
 
 interface LibraryState {
@@ -91,6 +107,7 @@ export async function startApp(settings: SettingsStore): Promise<void> {
 
   const sidebarRoot = requireElement("sidebar");
   const panelRoot = requireElement("panel");
+  const onBookmarksChanged = watchBookmarks();
   const [usage, icons, tree] = await Promise.all([
     loadUsage(),
     IconLibrary.load(),
@@ -166,27 +183,10 @@ export async function startApp(settings: SettingsStore): Promise<void> {
       .catch(warnOnFailure(`open ${url}`));
   };
 
-  const highlightSection = (folder: Folder) => {
-    // A folder holding only subfolders has no section of its own: show its first one.
-    const target = folderSections(folder)[0];
-    const section = target && document.getElementById(sectionElementId(target.id));
-    if (!section) return null;
-    section.scrollIntoView({ behavior: scrollBehavior(), block: "center" });
-    section.classList.add("is-highlighted");
-    window.setTimeout(() => {
-      section.classList.remove("is-highlighted");
-    }, 1600);
-    return section;
-  };
-  const revealFolder = (folder: Folder) => {
+  const openFolder = (folder: Folder) => {
     selectedFolderId = folder.topFolderId;
     render();
-    const section = folder.id === folder.topFolderId ? null : highlightSection(folder);
-    // Focus inside the revealed section: the next Tab from the title would scroll back to the top.
-    const focusTarget =
-      section?.querySelector<HTMLElement>(".link-card") ??
-      panelRoot.querySelector<HTMLElement>(".panel__title");
-    focusTarget?.focus({ preventScroll: true });
+    revealFolder(panelRoot, folder);
   };
 
   const spotlight = new Spotlight({
@@ -200,7 +200,7 @@ export async function startApp(settings: SettingsStore): Promise<void> {
       }),
     colorOf: (folder) => state.colorOf(folder),
     decorate,
-    onOpenFolder: revealFolder,
+    onOpenFolder: openFolder,
     onOpenBookmark: (bookmark, disposition) => {
       open(bookmark.url, disposition);
     },
@@ -303,16 +303,7 @@ export async function startApp(settings: SettingsStore): Promise<void> {
         .catch(warnOnFailure("reload bookmarks"));
     }, REBUILD_DELAY_MS);
   };
-  for (const event of [
-    chrome.bookmarks.onCreated,
-    chrome.bookmarks.onRemoved,
-    chrome.bookmarks.onChanged,
-    chrome.bookmarks.onMoved,
-    chrome.bookmarks.onChildrenReordered,
-    chrome.bookmarks.onImportEnded,
-  ]) {
-    event.addListener(rebuild);
-  }
+  onBookmarksChanged(rebuild);
 
   render();
   if (settings.current.focusSearchOnOpen) spotlight.focus();

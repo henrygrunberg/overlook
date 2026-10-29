@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { BackgroundView } from "./background-view";
 import type { WallpaperManifest } from "../wallpaper/schedule";
-import { readCustomBackground } from "./custom-background";
+import { readCustomBackground } from "../backgrounds/custom-background";
 import { currentFrame, loadDynamicWallpaper } from "../wallpaper/dynamic-wallpaper";
 
-vi.mock("./custom-background", () => ({ readCustomBackground: vi.fn() }));
+vi.mock("../backgrounds/custom-background", () => ({ readCustomBackground: vi.fn() }));
 vi.mock("../wallpaper/dynamic-wallpaper", () => ({
   loadDynamicWallpaper: vi.fn(),
   currentFrame: vi.fn(),
@@ -79,6 +79,29 @@ describe("BackgroundView", () => {
     await vi.advanceTimersByTimeAsync(60_000);
     expect(root.querySelectorAll(".is-visible")).toHaveLength(1);
     expect(root.querySelector(".is-visible")).toBe(shownLayer);
+    expect(root.dataset.background).toBe("photo:autumn-forest");
+  });
+
+  it("falls back to the default photo when a frame that fails is asked for again while it decodes", async () => {
+    let failDecode: (error: unknown) => void = () => undefined;
+    vi.spyOn(HTMLImageElement.prototype, "decode").mockImplementation(function (
+      this: HTMLImageElement,
+    ) {
+      if (!this.src.endsWith(BROKEN_FRAME)) return Promise.resolve();
+      return new Promise((_resolve, reject) => {
+        failDecode = reject;
+      });
+    });
+    vi.mocked(loadDynamicWallpaper).mockResolvedValue(WALLPAPER);
+    vi.mocked(currentFrame).mockReturnValue({ frame: 0, src: BROKEN_FRAME });
+    const view = new BackgroundView(root);
+
+    const first = view.apply({ kind: "auto" });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const second = view.apply({ kind: "dynamic" });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    failDecode(new DOMException("undecodable", "EncodingError"));
+    await Promise.all([first, second]);
     expect(root.dataset.background).toBe("photo:autumn-forest");
   });
 

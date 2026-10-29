@@ -3,6 +3,7 @@ import { DEFAULT_PHOTO, PHOTOS, photoThumbnailSrc } from "../backgrounds/photos"
 import type { Folder } from "../bookmarks/library";
 import {
   PHOTO_IDS,
+  parseSettings,
   sameBackground,
   type BackgroundChoice,
   type HomeSettings,
@@ -57,6 +58,11 @@ function shownBackground(
   return choice;
 }
 
+// Labels typed here are saved as typed and normalised when read back, so compare normalised.
+const sameLabels = (a: readonly LabelRule[], b: readonly LabelRule[]) =>
+  JSON.stringify(parseSettings({ labels: a }).labels) ===
+  JSON.stringify(parseSettings({ labels: b }).labels);
+
 function shownHomeSource(home: HomeSettings, folders: readonly Folder[]): HomeSource {
   const folderExists = folders.some((folder) => folder.id === home.folderId);
   return home.source === "folder" && !folderExists ? "favourites" : home.source;
@@ -70,6 +76,7 @@ export class SettingsDialog {
   private readonly homeError = errorLine();
   private readonly labelsError = errorLine();
   private customUrl: string | null = null;
+  private opener: Element | null = null;
 
   constructor(
     private readonly settings: SettingsStore,
@@ -117,15 +124,25 @@ export class SettingsDialog {
     this.dialog.addEventListener("pointerdown", (event) => {
       pressedBackdrop = event.target === this.dialog;
     });
+    // The second click of a double-click on the Settings button lands on the backdrop it opened.
     this.dialog.addEventListener("click", (event) => {
-      if (pressedBackdrop && event.target === this.dialog) this.dialog.close();
+      if (pressedBackdrop && event.target === this.dialog && event.detail <= 1) this.dialog.close();
     });
     this.dialog.addEventListener("close", () => {
       this.flushLabels();
       this.revokeCustomUrl();
+      // A change made here re-renders the page, which may have replaced the element focus was
+      // to return to.
+      if (this.opener && !this.opener.isConnected) button.focus();
     });
     window.addEventListener("pagehide", () => {
       this.flushLabels();
+    });
+    // The editor saves its whole list, so labels another tab changed meanwhile must be shown first.
+    settings.subscribe((current) => {
+      if (!this.dialog.open || this.saveTimer !== undefined) return;
+      if (sameLabels(current.labels, this.pendingLabels)) return;
+      this.body.children[2]?.replaceWith(this.labelsSection());
     });
     document.body.append(button, this.dialog);
   }
@@ -137,6 +154,7 @@ export class SettingsDialog {
       this.labelsSection(),
       this.iconsSection(),
     );
+    if (!this.dialog.open) this.opener = document.activeElement;
     this.dialog.showModal();
   }
 
@@ -409,7 +427,8 @@ export class SettingsDialog {
   }
 
   private labelsSection(): HTMLElement {
-    const editor = new LabelEditor(this.settings.current.labels, (labels) => {
+    this.pendingLabels = this.settings.current.labels;
+    const editor = new LabelEditor(this.pendingLabels, (labels) => {
       this.pendingLabels = [...labels];
       this.saveLabels();
     });

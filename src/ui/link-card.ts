@@ -3,7 +3,7 @@ import type { IconSource, IconState } from "../favicons/icon-library";
 import { iconOrigin } from "../favicons/icon-store";
 import type { LabelRule } from "../settings/settings";
 import { h } from "./dom";
-import { faviconUrl, isDefaultFavicon } from "./favicon";
+import { faviconUrl, isDefaultFavicon } from "./browser-favicon";
 import { icon, type IconName } from "./icons";
 import type { PanelAction } from "./panel";
 

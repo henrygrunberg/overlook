@@ -1,3 +1,5 @@
+import { shortcutModifier } from "./navigation";
+
 export interface ShortcutActions {
   readonly focusSearch: () => void;
   readonly openSettings: () => void;
@@ -11,15 +13,25 @@ function isTypingTarget(target: EventTarget | null): boolean {
   );
 }
 
+// A Latin layout's K is the letter it types; other layouts (Cyrillic, Greek…) type their own.
+function isKeyK(event: KeyboardEvent): boolean {
+  return /^[a-z]$/i.test(event.key) ? event.key.toLowerCase() === "k" : event.code === "KeyK";
+}
+
 export function bindShortcuts(page: Document, actions: ShortcutActions): void {
+  const isMac = shortcutModifier() === "⌘";
   page.addEventListener("keydown", (event) => {
-    if (event.defaultPrevented || event.isComposing || isTypingTarget(event.target)) return;
+    if (event.defaultPrevented || event.isComposing) return;
     if (page.querySelector("dialog[open]")) return;
+    const typing = isTypingTarget(event.target);
     const withShortcutModifier = event.metaKey || event.ctrlKey;
-    if (withShortcutModifier && event.key.toLowerCase() === "k") {
+    // In a field only Ctrl+K off the Mac, which the browser would take to its address bar; a
+    // Mac's Ctrl+K there deletes to the end of the line.
+    if (withShortcutModifier && isKeyK(event) && (!typing || (event.ctrlKey && !isMac))) {
       event.preventDefault();
       actions.focusSearch();
-    } else if (withShortcutModifier || event.altKey) {
+    } else if (typing || withShortcutModifier || (event.altKey && !isMac)) {
+      // A Mac types characters with Option (ł, @), so those still start a search.
       return;
     } else if (event.key === "/") {
       event.preventDefault();

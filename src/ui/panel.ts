@@ -4,7 +4,10 @@ import { h } from "./dom";
 import type { FolderColors } from "./folder-colors";
 import { icon } from "./icons";
 import { linkCard, type BookmarkDecor, type CardDetail } from "./link-card";
+import { scrollBehavior } from "./motion";
 import { countOf } from "./text";
+
+const HIGHLIGHT_MS = 1600;
 
 export type PanelView =
   | {
@@ -41,7 +44,7 @@ export function folderSections(folder: Folder): Section[] {
   return sections;
 }
 
-export const sectionElementId = (folderId: string) => `section-${folderId}`;
+const sectionElementId = (folderId: string) => `section-${folderId}`;
 
 const PANEL_ACTIONS = [
   "toggle-editing",
@@ -218,4 +221,27 @@ function renderFolder(
         : [emptyState("This folder is empty.")],
     ),
   );
+}
+
+function highlightSection(folder: Folder): HTMLElement | null {
+  // A folder holding only subfolders has no section of its own: show its first one.
+  const target = folderSections(folder)[0];
+  const section = target && document.getElementById(sectionElementId(target.id));
+  if (!section) return null;
+  section.scrollIntoView({ behavior: scrollBehavior(), block: "center" });
+  section.classList.add("is-highlighted");
+  window.setTimeout(() => {
+    section.classList.remove("is-highlighted");
+  }, HIGHLIGHT_MS);
+  return section;
+}
+
+/** Call after rendering the folder's top-level folder. */
+export function revealFolder(root: HTMLElement, folder: Folder): void {
+  const section = folder.id === folder.topFolderId ? null : highlightSection(folder);
+  // Focus inside the revealed section: the next Tab from the title would scroll back to the top.
+  const focusTarget =
+    section?.querySelector<HTMLElement>(".link-card") ??
+    root.querySelector<HTMLElement>(".panel__title");
+  focusTarget?.focus({ preventScroll: true });
 }

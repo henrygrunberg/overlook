@@ -75,7 +75,7 @@ beforeEach(async () => {
     storage: { local: { set: storageSet } },
   });
   vi.resetModules();
-  await import("./background");
+  await import("./service-worker");
 });
 
 afterEach(() => {

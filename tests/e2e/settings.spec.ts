@@ -200,4 +200,30 @@ test.describe("settings", () => {
     await expect(panel.getByRole("heading", { level: 2 })).toHaveText("Recently added");
     await expect(panel.locator(".link-card")).toHaveCount(8);
   });
+
+  test("marks the open folder, the background and the label colour in forced colors", async ({
+    newTab,
+  }) => {
+    await newTab.emulateMedia({ forcedColors: "active" });
+    await newTab.getByRole("button", { name: /Work/ }).click();
+    await expect(newTab.locator('.sidebar__item[aria-current="page"]')).toHaveCSS(
+      "border-top-style",
+      "solid",
+    );
+
+    const dialog = await openSettings(newTab);
+    await expect(dialog.locator('.background-tile[aria-pressed="true"] img')).toHaveCSS(
+      "outline-style",
+      "solid",
+    );
+    await dialog.getByRole("button", { name: "Edit label VPN" }).click();
+    await expect(dialog.locator(".label-editor__colour:checked")).toHaveCSS(
+      "border-top-style",
+      "solid",
+    );
+    await expect(dialog.locator(".label-editor__colour:not(:checked)").first()).toHaveCSS(
+      "border-top-style",
+      "none",
+    );
+  });
 });

@@ -1532,3 +1532,28 @@ input {
     scroll-behavior: auto !important;
   }
 }
+
+/* Forced colors drop the backgrounds and shadows that mark these choices. */
+@media (forced-colors: active) {
+  .sidebar__item[aria-current="page"] {
+    border: 2px solid Highlight;
+  }
+
+  .background-tile[aria-pressed="true"] img,
+  .background-tile[aria-pressed="true"] .background-tile__placeholder {
+    outline: 3px solid Highlight;
+  }
+
+  /* A swatch is its colour, so it keeps it, along with a ring that shows on any theme. */
+  .label-editor__colour {
+    forced-color-adjust: none;
+
+    &:checked {
+      border: 3px solid CanvasText;
+    }
+
+    &:focus-visible {
+      outline-color: Highlight;
+    }
+  }
+}

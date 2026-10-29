@@ -14,9 +14,12 @@ vi.mock("../wallpaper/dynamic-wallpaper", () => ({
   currentFrame: () => ({ src: "" }),
 }));
 
+type StorageListener = (changes: Record<string, { newValue?: unknown }>, area: string) => void;
+
 function stubStorage(initial: unknown, { failedReads = 0 } = {}) {
   let stored = initial;
   let readsToFail = failedReads;
+  const listeners: StorageListener[] = [];
   vi.stubGlobal("chrome", {
     storage: {
       local: {
@@ -30,10 +33,18 @@ function stubStorage(initial: unknown, { failedReads = 0 } = {}) {
           return Promise.resolve();
         },
       },
-      onChanged: { addListener: () => undefined },
+      onChanged: {
+        addListener: (listener: StorageListener) => {
+          listeners.push(listener);
+        },
+      },
     },
   });
-  return () => stored;
+  const changeInAnotherTab = (settings: unknown) => {
+    stored = settings;
+    for (const listener of listeners) listener({ settings: { newValue: settings } }, "local");
+  };
+  return { stored: () => stored, changeInAnotherTab };
 }
 
 async function openSettings(
@@ -41,7 +52,7 @@ async function openSettings(
   storedSettings?: unknown,
   storageOptions?: { failedReads: number },
 ) {
-  const stored = stubStorage(storedSettings, storageOptions);
+  const { stored, changeInAnotherTab } = stubStorage(storedSettings, storageOptions);
   const store = await SettingsStore.load();
   const settings = new SettingsDialog(store, {
     folders: () => [],
@@ -53,7 +64,7 @@ async function openSettings(
   await settings.open();
   const dialog = document.querySelector("dialog");
   if (!dialog) throw new Error("No settings dialog");
-  return { store, dialog, stored };
+  return { store, dialog, stored, changeInAnotherTab };
 }
 
 // happy-dom's :checked matches the checked attribute, not the radio's current state.
@@ -214,6 +225,36 @@ describe("SettingsDialog", () => {
     press(dialog);
     dialog.click();
     expect(dialog.open).toBe(false);
+  });
+
+  it("returns focus to the Settings button when the element it came from was re-rendered", async () => {
+    const card = document.createElement("button");
+    document.body.append(card);
+    card.focus();
+    const { dialog } = await openSettings();
+    card.remove();
+
+    dialog.close();
+    expect(document.activeElement?.getAttribute("aria-label")).toBe("Settings");
+  });
+
+  it("stays open when the second click of the double-click that opened it hits the backdrop", async () => {
+    const { dialog } = await openSettings();
+    press(dialog);
+    dialog.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 2 }));
+    expect(dialog.open).toBe(true);
+  });
+
+  it("shows labels another tab changed while it is open, so a label saved here keeps them", async () => {
+    const office = { ...WORK_LABEL, id: "office", text: "Office" };
+    const { dialog, stored, changeInAnotherTab } = await openSettings({}, { labels: [WORK_LABEL] });
+    changeInAnotherTab({ labels: [WORK_LABEL, office] });
+    expect(labelNames(dialog)).toEqual(["Work", "Office"]);
+
+    addLabel(dialog);
+    await vi.waitFor(() => {
+      expect(stored()).toMatchObject({ labels: [WORK_LABEL, office, { text: "Label" }] });
+    });
   });
 
   it("keeps the hidden file input out of the tab order and the accessibility tree", async () => {

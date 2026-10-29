@@ -1,9 +1,28 @@
 const COMBINING_MARKS = /\p{M}+/gu;
 const WORD_SEPARATORS = /[^\p{L}\p{N}]+/u;
+// Letters that NFKD keeps whole, so they have no accent to strip.
+const UNDECOMPOSED_LETTERS = new Map([
+  ["ß", "ss"],
+  ["æ", "ae"],
+  ["œ", "oe"],
+  ["ø", "o"],
+  ["đ", "d"],
+  ["ð", "d"],
+  ["ł", "l"],
+  ["ı", "i"],
+  ["þ", "th"],
+  ["ħ", "h"],
+  ["ŧ", "t"],
+]);
+const UNDECOMPOSED = new RegExp(`[${[...UNDECOMPOSED_LETTERS.keys()].join("")}]`, "g");
 
 /** Lower-cases and strips accents so "Café analüütika" matches "cafe analuutika". */
 export function normalize(text: string): string {
-  return text.normalize("NFKD").replace(COMBINING_MARKS, "").toLowerCase();
+  return text
+    .normalize("NFKD")
+    .replace(COMBINING_MARKS, "")
+    .toLowerCase()
+    .replace(UNDECOMPOSED, (letter) => UNDECOMPOSED_LETTERS.get(letter) ?? letter);
 }
 
 export function splitWords(normalized: string): string[] {

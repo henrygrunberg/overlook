@@ -20,17 +20,17 @@ Node 24+ (`engines`). The first e2e run needs `npx playwright install chromium`.
 ## Layout
 
 - `src/newtab.html` loads `src/focus-step.ts` first, as a plain (non-module) script, then `src/main.ts`, the page entry, which starts `src/app.ts`, where the new-tab page is wired together. `src/styles.css` is the one stylesheet.
-- `src/background.ts`: the service worker (icon sync, and the `wallpaperInstalled` check). `tsconfig.json` holds the shared options; `tsconfig.app.json` covers `src/`, `tsconfig.worker.json` the service worker (WebWorker types), and `tsconfig.node.json` the configs and `tests/e2e/` with Node's own resolution, so relative imports there need explicit `.ts` extensions (node runs `tests/e2e/preview.ts` directly).
+- `src/service-worker.ts`: the service worker, built as `background.js` (icon sync, and the `wallpaperInstalled` check). `tsconfig.json` holds the shared options; `tsconfig.app.json` covers `src/`, `tsconfig.worker.json` the service worker (WebWorker types), and `tsconfig.node.json` the configs and `tests/e2e/` with Node's own resolution, so relative imports there need explicit `.ts` extensions (node runs `tests/e2e/preview.ts` directly).
 - `src/bookmarks/`: builds the folder model from `chrome.bookmarks.getTree()`. Permanent roots are hidden: their subfolders become top-level folders, and their loose bookmarks a folder named after the root. Only allow-listed URL protocols are kept.
 - `src/private-network.ts`: `isPrivateNetworkHost`, used by the icon fetch guard and the VPN label.
 - `src/search/`: the fuzzy search index (prefix, typo, acronym, substring and subsequence matching, plus a usage boost) and accent-folding text helpers.
 - `src/favicons/`: icon discovery (a regex `<link>` scanner, because service workers have no `DOMParser`), fetching, normalising to 128px PNG, the icon records and the service-worker sync queue.
 - `src/storage/`: the shared IndexedDB (`icons` and `files` stores).
-- `src/backgrounds/`: the bundled photos (AVIF), the custom upload and the background view. `src/wallpaper/`: the dynamic wallpaper end to end: manifest parsing, frame schedule, sun position and the time-zone table.
+- `src/backgrounds/`: the bundled photos (AVIF), and the custom upload. `src/wallpaper/`: the dynamic wallpaper end to end: manifest parsing, frame schedule, sun position and the time-zone table.
 - `src/settings/`, `src/labels/`: validated settings in `chrome.storage.local`, and the label rules (host globs, private-network flag).
 - `src/home/`: what Home shows (favourites, frequent links or a folder). `src/usage/`: decaying scores for links opened from Overlook, in `chrome.storage.local`.
 - `src/validation.ts`: shared type-guard helpers (`isRecord`, `isOneOf`, `isFiniteNumber`). `src/log.ts`: `warn` / `warnOnFailure`.
-- `src/ui/`: DOM components, all built with `h()` from `src/ui/dom.ts`. `shortcuts.ts` binds the global keys and `panel-events.ts` the panel's click and drag delegation. `src/test/`: the sample library for unit tests.
+- `src/ui/`: DOM components, all built with `h()` from `src/ui/dom.ts`, including `background-view.ts` (the wallpaper layers). `shortcuts.ts` binds the global keys and `panel-events.ts` the panel's click and drag delegation. `src/test/`: the sample library for unit tests.
 - `src/icons/`: the SVG sources of the extension icon (not shipped).
 - `public/`: `manifest.json`, `icons/` (the PNGs), `backgrounds/` (photos, thumbs and `CREDITS.txt`, the Unsplash notice that ships in the zip), `wallpapers/` (the user's own frames and manifest, git-ignored).
 - `tests/e2e/`: Playwright fixtures, a fake-site server, sample bookmarks, the specs and `preview.ts`.
@@ -62,14 +62,14 @@ Generated files that are committed, with no generator in the repo:
   - Why it works: `chrome/browser/ui/focus_tab_after_navigation_helper.cc` focuses the page on a page-initiated navigation away from the new-tab page; `chrome.tabs.update` is excluded on purpose (crbug.com/40693812).
   - Doesn't work: `focus()` alone, `document.hasFocus()` as a check, `pushState`, `location.reload()`, navigating or `chrome.tabs.update` to `chrome://newtab`. Only a real Cmd+T shows the effect.
 - **The manifest `key` fixes the extension ID** (`imabhmapeefoacmhgemijamhnfcnbdoa`), whatever folder the unpacked extension is loaded from, so updates keep users' data. Only the public key is in the repo; there is no private key because nothing is packed as a .crx.
-- **The dynamic wallpaper is detected once:** a missing extension file can't be fetched without a console error, so `background.ts` checks for `wallpapers/manifest.json` on install and start-up and stores `wallpaperInstalled`; pages fetch the manifest only when it's `true`. After adding frames, reload the extension.
+- **The dynamic wallpaper is detected once:** a missing extension file can't be fetched without a console error, so `service-worker.ts` checks for `wallpapers/manifest.json` on install and start-up and stores `wallpaperInstalled`; pages fetch the manifest only when it's `true`. After adding frames, reload the extension.
 - **`npm run preview` clears the profile's cached service worker:** Chromium otherwise keeps running an old copy of an unpacked extension's background script across launches.
 - **TypeScript is pinned to 6.0.x:** typescript-eslint supports only TS < 6.1. `deps:update` (`--peer`) holds it back; Dependabot ignores TypeScript 6.1 and later. Dependabot also ignores `@types/node` majors, which follow `engines`.
 - **Font size:** Chromium's extension-page stylesheet shrinks body text to 75%, so type is set on `body`, not `:root`.
 - **Wallpaper frames are chosen by the sun's altitude**, with azimuth only telling morning from evening (`src/wallpaper/schedule.ts`): schedules are shot at one latitude, and full sky position breaks elsewhere (Nordic summer sunrise is in the north-east). Location comes only from the time zone (`timezone-coordinates.ts`), never from geolocation.
 - **Settings use `storage.local`:** `storage.sync` caps items at 8 KB, which labels exceed. A custom background carries `savedAt`, so replacing the image is a real settings change that every tab sees.
 - **Build warning:** Vite's `<script src="./focus-step.js"> ... can't be bundled without type="module"` is expected. `focus-step.js` is its own entry, loaded as a classic `<head>` script so it runs before the page renders.
-- **Service-worker lifetime:** Chrome stops idle extension service workers after 30 s, and fetches don't count as activity. `background.ts` pings an extension API while a sync runs.
+- **Service-worker lifetime:** Chrome stops idle extension service workers after 30 s, and fetches don't count as activity. `service-worker.ts` pings an extension API while a sync runs.
 - **e2e browser setup** (`tests/e2e/fixtures.ts`):
   - Tests take the extension ID from the service worker URL.
   - Chromium starts with `--host-resolver-rules=MAP public.example.com 127.0.0.1, MAP * ~NOTFOUND, EXCLUDE 127.0.0.1`, so tests never reach the internet. `context.route` answers every other http(s) host with a stub page. `FakeSites` serves on 127.0.0.1 and on `public.example.com`, a host the extension treats as public (used by the redirect test).

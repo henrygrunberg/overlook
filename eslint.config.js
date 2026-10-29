@@ -1,9 +1,10 @@
 import js from "@eslint/js";
-import { defineConfig } from "eslint/config";
+import { defineConfig, includeIgnoreFile } from "eslint/config";
 import tseslint from "typescript-eslint";
 
 export default defineConfig(
-  { ignores: ["dist", "test-results"] },
+  // ESLint doesn't read .gitignore, whose entries include builds and agents' worktree checkouts.
+  includeIgnoreFile(`${import.meta.dirname}/.gitignore`, { gitignoreResolution: true }),
   js.configs.recommended,
   tseslint.configs.strictTypeChecked,
   tseslint.configs.stylisticTypeChecked,

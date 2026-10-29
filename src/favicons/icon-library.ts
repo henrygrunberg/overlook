@@ -25,18 +25,28 @@ export class IconLibrary implements IconSource {
   private readonly records = new Map<string, IconRecord>();
   // Object URLs are made on first use: a new tab shows a few dozen of possibly thousands.
   private readonly imageUrls = new Map<string, string>();
+  private readonly announcedBeforeWatch = new Set<string>();
+  private onUpdate: ((origin: string) => void) | undefined;
 
-  private constructor(records: readonly IconRecord[]) {
-    for (const record of records) this.records.set(record.origin, record);
+  // Listening starts before the cache is read: the service worker announces each icon only once.
+  private constructor() {
+    new BroadcastChannel(ICON_CHANNEL).addEventListener("message", (event: MessageEvent) => {
+      const data: unknown = event.data;
+      const origin = isRecord(data) ? data.origin : undefined;
+      if (typeof origin !== "string") return;
+      if (this.onUpdate) this.refresh(origin);
+      else this.announcedBeforeWatch.add(origin);
+    });
   }
 
   static async load(): Promise<IconLibrary> {
+    const library = new IconLibrary();
     try {
-      return new IconLibrary(await readAllIcons());
+      for (const record of await readAllIcons()) library.records.set(record.origin, record);
     } catch (error: unknown) {
       warn("read cached icons", error);
-      return new IconLibrary([]);
     }
+    return library;
   }
 
   iconFor(pageUrl: string): IconState {
@@ -52,18 +62,19 @@ export class IconLibrary implements IconSource {
   }
 
   watch(onUpdate: (origin: string) => void): void {
-    new BroadcastChannel(ICON_CHANNEL).addEventListener("message", (event: MessageEvent) => {
-      const data: unknown = event.data;
-      const origin = isRecord(data) ? data.origin : undefined;
-      if (typeof origin !== "string") return;
-      void readIcon(origin)
-        .then((record) => {
-          if (!record) return;
-          this.store(record);
-          onUpdate(origin);
-        })
-        .catch(warnOnFailure(`read the icon for ${origin}`));
-    });
+    this.onUpdate = onUpdate;
+    for (const origin of this.announcedBeforeWatch) this.refresh(origin);
+    this.announcedBeforeWatch.clear();
+  }
+
+  private refresh(origin: string): void {
+    void readIcon(origin)
+      .then((record) => {
+        if (!record) return;
+        this.store(record);
+        this.onUpdate?.(origin);
+      })
+      .catch(warnOnFailure(`read the icon for ${origin}`));
   }
 
   request(pageUrls: readonly string[], force = false): void {

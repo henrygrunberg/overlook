@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { boundedEditDistance, subsequenceScore } from "./text";
+import { boundedEditDistance, normalize, subsequenceScore } from "./text";
+
+describe("normalize", () => {
+  it("spells letters without a decomposition the way they're typed in ASCII", () => {
+    expect(normalize("Straße Œuvres Ærø Łódź Đà Lạt Iğdır")).toBe(
+      "strasse oeuvres aero lodz da lat igdir",
+    );
+  });
+});
 
 describe("boundedEditDistance", () => {
   it.each([

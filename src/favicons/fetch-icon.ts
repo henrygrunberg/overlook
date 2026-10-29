@@ -6,6 +6,7 @@ import {
   rankIcons,
   type IconCandidate,
 } from "./discover";
+import { imageSize } from "./image-size";
 
 const PAGE_BYTE_LIMIT = 512 * 1024;
 const MANIFEST_BYTE_LIMIT = 64 * 1024;
@@ -18,7 +19,6 @@ const STORED_ICON_SIZE = 128;
 /** Anything smaller would look blurry, so a letter tile is shown instead. */
 const MIN_ICON_SIZE = 32;
 const GOOD_ENOUGH_SIZE = 96;
-// The byte limit doesn't bound the decoded size: a small PNG can declare 30000×30000 pixels.
 const MAX_DECODED_SIZE = 4096;
 
 export interface FetchedIcon {
@@ -198,6 +198,14 @@ async function isReachable(origin: string, fetchImpl: Fetch): Promise<boolean> {
   return probe !== "unreachable";
 }
 
+const bareHost = (url: string) => new URL(url).hostname.replace(/^www\./, "");
+
+// Requests carry no cookies, so a site behind a sign-in redirects to its login page, whose icons
+// are the login provider's. Only a page on the site's own host speaks for the site.
+function isOnSite(pageUrl: string, origin: string): boolean {
+  return bareHost(pageUrl) === bareHost(origin);
+}
+
 export async function discoverIcons(
   origin: string,
   fetchImpl: Fetch,
@@ -205,7 +213,7 @@ export async function discoverIcons(
   const page = await get(fetchImpl, `${origin}/`, origin, "text/html", readHead);
   if (page === "unreachable" && !(await isReachable(origin, fetchImpl))) return "unreachable";
   const candidates: IconCandidate[] = [];
-  if (typeof page !== "string" && page.type.includes("html")) {
+  if (typeof page !== "string" && page.type.includes("html") && isOnSite(page.url, origin)) {
     const { icons, manifestUrl } = findPageIcons(page.body, page.url);
     candidates.push(...icons);
     if (manifestUrl) candidates.push(...(await fetchManifestIcons(fetchImpl, manifestUrl, origin)));
@@ -249,6 +257,11 @@ export async function normalizeIcon(
   bytes: Uint8Array<ArrayBuffer>,
   type: string,
 ): Promise<(FetchedIcon & { readonly sourceSize: number }) | null> {
+  // The byte limit doesn't bound the decoded size (a 30 KB PNG can declare 16000×16000 pixels),
+  // and createImageBitmap decodes in full before its size can be checked, so the header is read
+  // first. A format without a known header isn't decoded at all.
+  const declared = imageSize(bytes);
+  if (!declared || Math.max(declared.width, declared.height) > MAX_DECODED_SIZE) return null;
   let bitmap: ImageBitmap;
   try {
     bitmap = await createImageBitmap(new Blob([bytes], { type: type || "image/x-icon" }));

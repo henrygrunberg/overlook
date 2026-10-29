@@ -35,6 +35,6 @@ jobs:
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: failure()
         with:
-          name: playwright-results
+          name: playwright-results-run-${{ github.run_number }}-attempt-${{ github.run_attempt }}
           path: test-results/
           retention-days: 7

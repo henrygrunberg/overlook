@@ -285,7 +285,9 @@ export class LabelEditor {
       const text = event.clipboardData?.getData("text") ?? "";
       if (!/[\s,]/.test(text.trim())) return;
       event.preventDefault();
-      commit(input.value + text);
+      const { value, selectionStart, selectionEnd } = input;
+      const start = selectionStart ?? value.length;
+      commit(value.slice(0, start) + text + value.slice(selectionEnd ?? start));
     });
     input.addEventListener("blur", () => {
       commit(input.value);

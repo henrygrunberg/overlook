@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { bindShortcuts } from "./shortcuts";
 
 describe("bindShortcuts", () => {
@@ -6,11 +6,20 @@ describe("bindShortcuts", () => {
   const openSettings = vi.fn();
   let page: Document;
 
+  function bindPage(): Document {
+    const created = document.implementation.createHTMLDocument();
+    bindShortcuts(created, { focusSearch, openSettings });
+    return created;
+  }
+
   beforeEach(() => {
     focusSearch.mockClear();
     openSettings.mockClear();
-    page = document.implementation.createHTMLDocument();
-    bindShortcuts(page, { focusSearch, openSettings });
+    page = bindPage();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   function press(key: string, init: KeyboardEventInit = {}, target: EventTarget = page) {
@@ -54,6 +63,42 @@ describe("bindShortcuts", () => {
     page.body.append(field);
     press("/", {}, field);
     expect(focusSearch).not.toHaveBeenCalled();
+  });
+
+  it("keeps Ctrl+K from the browser while typing in the search field", () => {
+    const field = page.createElement("input");
+    page.body.append(field);
+    expect(press("k", { ctrlKey: true }, field).defaultPrevented).toBe(true);
+    expect(focusSearch).toHaveBeenCalledOnce();
+  });
+
+  it("finds Ctrl+K by its key on a layout without Latin letters", () => {
+    expect(press("л", { ctrlKey: true, code: "KeyK" }).defaultPrevented).toBe(true);
+    expect(focusSearch).toHaveBeenCalledOnce();
+  });
+
+  it("goes by the letter on a Latin layout that types another one on the K key", () => {
+    expect(press("t", { ctrlKey: true, code: "KeyK" }).defaultPrevented).toBe(false);
+    expect(focusSearch).not.toHaveBeenCalled();
+  });
+
+  describe("on a Mac", () => {
+    beforeEach(() => {
+      vi.spyOn(navigator, "platform", "get").mockReturnValue("MacIntel");
+      page = bindPage();
+    });
+
+    it("lets a character typed with Option start a search", () => {
+      press("ł", { altKey: true });
+      expect(focusSearch).toHaveBeenCalledOnce();
+    });
+
+    it("leaves Ctrl+K in a field to the field", () => {
+      const field = page.createElement("input");
+      page.body.append(field);
+      expect(press("k", { ctrlKey: true }, field).defaultPrevented).toBe(false);
+      expect(focusSearch).not.toHaveBeenCalled();
+    });
   });
 
   it("leaves keys alone while a dialog is open", () => {

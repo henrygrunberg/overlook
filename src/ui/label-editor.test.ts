@@ -170,17 +170,27 @@ describe("LabelEditor", () => {
     expect(add?.getAttribute("aria-describedby")).toBe(hint?.id);
   });
 
+  const paste = (input: HTMLInputElement, text: string) => {
+    const event = new Event("paste", { bubbles: true, cancelable: true });
+    Object.defineProperty(event, "clipboardData", { value: { getData: () => text } });
+    input.dispatchEvent(event);
+    return event;
+  };
+
   it("adds every address of a pasted list", () => {
     const { open, chips } = mount([WORK]);
     const input = open("work");
-    const paste = new Event("paste", { bubbles: true, cancelable: true });
-    Object.defineProperty(paste, "clipboardData", {
-      value: { getData: () => "10.*\n*.atlassian.net\njira.acme.com" },
-    });
-    input.dispatchEvent(paste);
-
-    expect(paste.defaultPrevented).toBe(true);
+    expect(paste(input, "10.*\n*.atlassian.net\njira.acme.com").defaultPrevented).toBe(true);
     expect(chips("work")).toEqual(["jira.acme.com", "10.*", "*.atlassian.net"]);
+  });
+
+  it("puts a pasted list in place of the selected text", () => {
+    const { open, chips } = mount([WORK]);
+    const input = open("work");
+    input.value = "acme.com";
+    input.setSelectionRange(0, input.value.length);
+    paste(input, "a.com, b.com");
+    expect(chips("work")).toEqual(["jira.acme.com", "a.com", "b.com"]);
   });
 
   it("shows addresses as text, never as markup", () => {

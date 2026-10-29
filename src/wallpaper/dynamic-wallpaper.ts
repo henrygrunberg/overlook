@@ -3,7 +3,7 @@ import { coordinatesForTimeZone, currentTimeZone } from "./location";
 import { frameFor, parseManifest, type WallpaperManifest } from "./schedule";
 
 const WALLPAPER_DIR = "wallpapers/";
-// Set by background.ts, which checks at startup whether a wallpaper is installed. A page clears it
+// Set by service-worker.ts, which checks at startup whether a wallpaper is installed. A page clears it
 // when the folder has gone since, so only the first tab pays for the failing fetch.
 const INSTALLED_FLAG = "wallpaperInstalled";
 
