@@ -1,0 +1,46 @@
+{
+  "name": "overlook",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Your bookmarks in folders, Spotlight-style search and sharp site icons over a photo of your choice.",
+  "license": "MIT",
+  "author": "Henry Grünberg",
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "build": "vite build",
+    "dev": "vite build --watch --mode development",
+    "typecheck": "tsc --build",
+    "lint": "eslint .",
+    "format:check": "prettier --check .",
+    "fix": "eslint . --fix && prettier --write .",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "test:e2e": "npm run build && playwright test",
+    "check": "npm run typecheck && npm run lint && npm run format:check && npm run test:coverage && npm run test:e2e",
+    "preview": "npm run build && node tests/e2e/preview.ts",
+    "deps:update": "npx --yes npm-check-updates@23.1.1 --upgrade --peer && npm install && npx playwright install chromium && npm audit && npm run check"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@playwright/test": "1.64.1",
+    "@types/chrome": "0.3.7",
+    "@types/node": "24.19.2",
+    "@vitest/coverage-v8": "5.0.5",
+    "eslint": "10.13.0",
+    "happy-dom": "21.0.4",
+    "prettier": "3.9.10",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.72.1",
+    "vite": "8.3.5",
+    "vitest": "5.0.5"
+  },
+  "prettier": {
+    "printWidth": 100
+  },
+  "allowScripts": {
+    "fsevents": false
+  }
+}

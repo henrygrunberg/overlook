@@ -1,0 +1,9 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.worker.tsbuildinfo",
+    "lib": ["ES2024", "WebWorker"],
+    "types": ["chrome"]
+  },
+  "include": ["src/background.ts"]
+}

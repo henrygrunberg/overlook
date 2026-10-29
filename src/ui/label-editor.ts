@@ -1,0 +1,352 @@
+import {
+  LABEL_COLORS,
+  MAX_HOST_PATTERNS,
+  MAX_LABEL_LENGTH,
+  MAX_LABELS,
+  parseHostPatterns,
+  type LabelRule,
+} from "../settings/settings";
+import { h } from "./dom";
+import { icon } from "./icons";
+import { countOf } from "./text";
+
+const addressCount = (count: number) => countOf(count, "address", "addresses");
+
+export function labelSummary(label: LabelRule): string {
+  const addresses = label.hosts.length === 0 ? "" : addressCount(label.hosts.length);
+  if (label.privateNetwork)
+    return addresses ? `Private networks + ${addresses}` : "Private networks";
+  return addresses || "No addresses yet";
+}
+
+type LabelEdit = (changes: Partial<LabelRule>) => void;
+
+const hostsHeading = (label: LabelRule) => `Addresses tagged ${label.text}`;
+const LIMIT_HINT_ID = "label-limit-hint";
+
+export function addHosts(hosts: readonly string[], text: string): string[] {
+  const merged = [...new Set([...hosts, ...parseHostPatterns(text)])];
+  return merged.slice(0, MAX_HOST_PATTERNS);
+}
+
+export class LabelEditor {
+  readonly element: HTMLElement;
+  private readonly list = h("div", { className: "label-list" });
+  private readonly addButton = h("button", {
+    className: "settings__action",
+    text: "New label",
+    attributes: { type: "button" },
+  });
+  private readonly limitHint = h("p", {
+    className: "label-editor__limit",
+    text: `That's the limit of ${MAX_LABELS} labels.`,
+    attributes: { id: LIMIT_HINT_ID },
+  });
+  private labels: LabelRule[];
+  private openId: string | null = null;
+
+  constructor(
+    initial: readonly LabelRule[],
+    private readonly onChange: (labels: readonly LabelRule[]) => void,
+  ) {
+    this.labels = [...initial];
+    this.addButton.addEventListener("click", () => {
+      const label: LabelRule = {
+        id: crypto.randomUUID(),
+        text: "Label",
+        color: LABEL_COLORS[this.labels.length % LABEL_COLORS.length] ?? "gray",
+        privateNetwork: false,
+        hosts: [],
+      };
+      this.labels.push(label);
+      this.onChange(this.labels);
+      this.openId = label.id;
+      this.render();
+      this.list.querySelector<HTMLInputElement>(".label-editor__name")?.select();
+    });
+    this.element = h("div", { className: "label-editor" }, [
+      this.list,
+      this.addButton,
+      this.limitHint,
+    ]);
+    this.render();
+  }
+
+  private update(id: string, changes: Partial<LabelRule>): LabelRule | undefined {
+    const index = this.labels.findIndex((label) => label.id === id);
+    const current = this.labels[index];
+    if (!current) return undefined;
+    const next = { ...current, ...changes };
+    this.labels[index] = next;
+    this.onChange(this.labels);
+    return next;
+  }
+
+  private render(): void {
+    this.list.replaceChildren(...this.labels.map((label) => this.row(label)));
+    const full = this.labels.length >= MAX_LABELS;
+    this.addButton.disabled = full;
+    this.limitHint.hidden = !full;
+    // A description is read even from a hidden element, so link the hint only while it shows.
+    if (full) this.addButton.setAttribute("aria-describedby", LIMIT_HINT_ID);
+    else this.addButton.removeAttribute("aria-describedby");
+  }
+
+  private toggle(id: string): void {
+    this.openId = this.openId === id ? null : id;
+    this.render();
+    this.list
+      .querySelector<HTMLButtonElement>(`[data-label-id="${CSS.escape(id)}"] .label-row__toggle`)
+      ?.focus();
+  }
+
+  private row(label: LabelRule): HTMLElement {
+    const isOpen = this.openId === label.id;
+    const panelId = `label-panel-${label.id}`;
+    const chip = h("span", { className: `chip chip--${label.color}`, text: label.text });
+    const summary = h("span", { className: "label-row__summary", text: labelSummary(label) });
+    const toggle = h(
+      "button",
+      {
+        className: "label-row__toggle",
+        attributes: {
+          type: "button",
+          "aria-expanded": String(isOpen),
+          "aria-controls": panelId,
+          "aria-label": `${isOpen ? "Done editing" : "Edit"} label ${label.text}`,
+        },
+      },
+      [h("span", { text: isOpen ? "Done" : "Edit" }), icon("chevron-down")],
+    );
+    toggle.addEventListener("click", () => {
+      this.toggle(label.id);
+    });
+
+    const edit: LabelEdit = (changes) => {
+      const current = this.update(label.id, changes);
+      if (!current) return;
+      chip.className = `chip chip--${current.color}`;
+      chip.textContent = current.text;
+      summary.textContent = labelSummary(current);
+      toggle.setAttribute("aria-label", `Done editing label ${current.text}`);
+      const heading = row.querySelector(".host-input__heading");
+      if (heading) heading.textContent = hostsHeading(current);
+    };
+
+    const row = h(
+      "div",
+      {
+        className: `label-row${isOpen ? " is-open" : ""}`,
+        attributes: { "data-label-id": label.id },
+      },
+      [
+        h("div", { className: "label-row__header" }, [chip, summary, toggle]),
+        isOpen &&
+          h("div", { className: "label-row__panel", attributes: { id: panelId } }, [
+            this.nameAndColour(label, edit),
+            this.hostInput(label, edit),
+            this.privateNetworkToggle(label, edit),
+            this.deleteButton(label),
+          ]),
+      ],
+    );
+    return row;
+  }
+
+  private nameAndColour(label: LabelRule, edit: LabelEdit): HTMLElement {
+    const name = h("input", {
+      className: "label-editor__name",
+      attributes: {
+        type: "text",
+        value: label.text,
+        maxlength: String(MAX_LABEL_LENGTH),
+        "aria-label": "Label name",
+      },
+    });
+    // A label needs a name: clearing it keeps the previous one rather than deleting the label.
+    name.addEventListener("input", () => {
+      if (name.value.trim()) edit({ text: name.value });
+    });
+    name.addEventListener("blur", () => {
+      if (!name.value.trim()) {
+        name.value = this.labels.find((other) => other.id === label.id)?.text ?? label.text;
+      }
+    });
+
+    const colours = h(
+      "div",
+      {
+        className: "label-editor__colours",
+        attributes: { role: "radiogroup", "aria-label": "Label colour" },
+      },
+      LABEL_COLORS.map((color) => {
+        const swatch = h("input", {
+          className: `label-editor__colour chip--${color}`,
+          attributes: {
+            type: "radio",
+            name: `label-colour-${label.id}`,
+            value: color,
+            "aria-label": color,
+            ...(color === label.color ? { checked: "" } : {}),
+          },
+        });
+        swatch.addEventListener("change", () => {
+          edit({ color });
+        });
+        return swatch;
+      }),
+    );
+
+    return h("div", { className: "label-editor__name-row" }, [name, colours]);
+  }
+
+  private hostInput(label: LabelRule, edit: LabelEdit): HTMLElement {
+    let hosts = [...label.hosts];
+    const headingId = `label-hosts-${label.id}`;
+    const hintId = `label-hosts-hint-${label.id}`;
+    const chips = h("ul", {
+      className: "host-chips",
+      attributes: { "aria-label": "Added addresses" },
+    });
+    const input = h("input", {
+      className: "host-input__field",
+      attributes: {
+        type: "text",
+        placeholder: "jira.acme.com, *.atlassian.net, 10.*",
+        "aria-labelledby": headingId,
+        "aria-describedby": hintId,
+        autocomplete: "off",
+        spellcheck: "false",
+      },
+    });
+    const count = h("span", { className: "host-input__count" });
+
+    const save = (next: string[]) => {
+      hosts = next;
+      edit({ hosts });
+      renderChips();
+    };
+    const commit = (text: string) => {
+      input.value = "";
+      if (text.trim()) save(addHosts(hosts, text));
+    };
+    const renderChips = () => {
+      chips.replaceChildren(
+        ...hosts.map((host) => {
+          const remove = h(
+            "button",
+            {
+              className: "host-chip__remove",
+              attributes: { type: "button", "aria-label": `Remove ${host}` },
+            },
+            [icon("close")],
+          );
+          // Keeps focus in the text field: a blur there would commit its text and rebuild the
+          // chips under the pointer, swallowing this click.
+          remove.addEventListener("pointerdown", (event) => {
+            event.preventDefault();
+          });
+          remove.addEventListener("click", () => {
+            save(hosts.filter((other) => other !== host));
+            input.focus();
+          });
+          return h("li", { className: "host-chip" }, [
+            h("span", { className: "host-chip__text", text: host }),
+            remove,
+          ]);
+        }),
+      );
+      // Read-only rather than disabled, so a field that fills up keeps keyboard focus.
+      const full = hosts.length >= MAX_HOST_PATTERNS;
+      input.readOnly = full;
+      input.setAttribute("aria-disabled", String(full));
+      count.textContent = full
+        ? `That's the limit of ${MAX_HOST_PATTERNS} addresses.`
+        : "Press Enter to add. Paste a list to add many at once.";
+    };
+    renderChips();
+
+    input.addEventListener("keydown", (event) => {
+      if (event.isComposing) return;
+      if (event.key === "Enter" || event.key === ",") {
+        event.preventDefault();
+        commit(input.value);
+      } else if (
+        event.key === "Backspace" &&
+        !event.repeat &&
+        input.value === "" &&
+        hosts.length > 0
+      ) {
+        event.preventDefault();
+        save(hosts.slice(0, -1));
+      }
+    });
+    input.addEventListener("paste", (event) => {
+      const text = event.clipboardData?.getData("text") ?? "";
+      if (!/[\s,]/.test(text.trim())) return;
+      event.preventDefault();
+      commit(input.value + text);
+    });
+    input.addEventListener("blur", () => {
+      commit(input.value);
+    });
+
+    const box = h("div", { className: "host-input__box" }, [chips, input]);
+    box.addEventListener("click", (event) => {
+      if (event.target === box) input.focus();
+    });
+
+    return h("div", { className: "host-input" }, [
+      h("p", {
+        className: "host-input__heading",
+        text: hostsHeading(label),
+        attributes: { id: headingId },
+      }),
+      box,
+      h("p", { className: "host-input__hint", attributes: { id: hintId } }, [
+        count,
+        " Use * as a wildcard: *.acme.com covers acme.com and all its subdomains.",
+      ]),
+    ]);
+  }
+
+  private privateNetworkToggle(label: LabelRule, edit: LabelEdit): HTMLElement {
+    const checkbox = h("input", {
+      attributes: { type: "checkbox", ...(label.privateNetwork ? { checked: "" } : {}) },
+    });
+    checkbox.addEventListener("change", () => {
+      edit({ privateNetwork: checkbox.checked });
+    });
+    return h("label", { className: "settings__check" }, [
+      checkbox,
+      h("span", { text: "Also private-network addresses (10.x, 192.168.x, localhost, *.local …)" }),
+    ]);
+  }
+
+  private deleteButton(label: LabelRule): HTMLElement {
+    const remove = h("button", {
+      className: "label-row__delete",
+      text: "Delete label",
+      attributes: { type: "button" },
+    });
+    remove.addEventListener("click", () => {
+      this.delete(label.id);
+    });
+    return remove;
+  }
+
+  private delete(id: string): void {
+    const index = this.labels.findIndex((label) => label.id === id);
+    const label = this.labels[index];
+    if (!label) return;
+    const confirmation = `Delete ${label.text} and its ${addressCount(label.hosts.length)}?`;
+    if (label.hosts.length > 0 && !window.confirm(confirmation)) return;
+
+    this.labels = this.labels.filter((other) => other !== label);
+    this.onChange(this.labels);
+    this.openId = null;
+    this.render();
+    const next = this.list.querySelectorAll<HTMLButtonElement>(".label-row__toggle")[index];
+    (next ?? this.addButton).focus();
+  }
+}

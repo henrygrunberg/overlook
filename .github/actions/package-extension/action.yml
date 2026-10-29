@@ -1,0 +1,29 @@
+name: Package the extension
+description: Zips dist/ and the licence into a fixed overlook/ folder, checks the listing and writes a SHA-256 file.
+inputs:
+  zip:
+    description: File name of the zip to write
+    required: true
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        ARCHIVE: ${{ inputs.zip }}
+      run: |
+        rm -rf package "$ARCHIVE" "$ARCHIVE.sha256"
+        mkdir -p package/overlook
+        cp -R dist/. LICENSE package/overlook/
+        (cd package && zip -qr "../$ARCHIVE" overlook)
+        listing="$(unzip -Z1 "$ARCHIVE")"
+        for required in manifest.json LICENSE; do
+          if ! grep -qx "overlook/$required" <<< "$listing"; then
+            echo "::error::The zip has no overlook/$required"
+            exit 1
+          fi
+        done
+        if grep -E '^overlook/wallpapers/|\.map$' <<< "$listing"; then
+          echo "::error::The zip contains wallpaper frames or source maps"
+          exit 1
+        fi
+        sha256sum "$ARCHIVE" > "$ARCHIVE.sha256"

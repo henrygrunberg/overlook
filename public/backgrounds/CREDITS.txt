@@ -1,0 +1,9 @@
+The background photos in this folder come from Unsplash and are used under the Unsplash
+License (https://unsplash.com/license). They are not covered by Overlook's MIT License.
+
+Autumn forest, by Kush Dwivedi: https://unsplash.com/photos/qG-zuuHbFTw
+Still lake, by Ahmet Yüksek: https://unsplash.com/photos/R9-Hwv8nDl0
+Golden haze, by Cristina Gottardi: https://unsplash.com/photos/wndpWTiDuT0
+Alpine ridge, by Dario Jud: https://unsplash.com/photos/HXbAioPEVyQ
+
+The thumbs/ folder holds smaller copies of the same photos.

@@ -1,0 +1,24 @@
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      dev-dependencies:
+        patterns: ["*"]
+    ignore:
+      # typescript-eslint supports TypeScript below 6.1; raise this when it supports more.
+      - dependency-name: typescript
+        versions: [">=6.1.0"]
+      # The typings follow the Node version in "engines", not the newest Node.
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7

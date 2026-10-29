@@ -1,0 +1,26 @@
+{
+  "manifest_version": 3,
+  "name": "Overlook",
+  "version": "0.1.0",
+  "description": "Your bookmarks in folders, Spotlight-style search and sharp site icons over a photo of your choice.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAqPzcfL8pnKPn4YQVxASSo+gTzz7ZvU10mH9GbSGGKET6ph5q7XytRYLrGJ4t5YTEY48NA4ezDfgU9+zbh0XfnjJ2ZemW44eaC6RTMaOd+9DgMG8t5tAD1Q3zadTpWptRJ9y9UazejdsqnKmKcYsDGe4CKNF4gAsy3yVsDdhxl2C9zUCAaZvthsfLsyeG1mH79bGoCiyXD7fQ0vmtj2lt9r/pHzFa56U60tuG7zEnZYQh3iBYLREl8t1ziKT7UnHuM1r92HlgtFHSZo0zolDkBDncQHSuyw0S9E1ZbcAjr2f5UCW12NWAy/SpV7LJOECgUcVRFG/cfIK26AYh6ostzQIDAQAB",
+  "minimum_chrome_version": "120",
+  "chrome_url_overrides": {
+    "newtab": "newtab.html"
+  },
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "permissions": ["bookmarks", "favicon", "search", "storage"],
+  "host_permissions": ["https://*/*", "http://*/*"],
+  "content_security_policy": {
+    "extension_pages": "default-src 'self'; script-src 'self'; img-src 'self' blob:; connect-src 'self' https: http:; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; require-trusted-types-for 'script'; trusted-types 'none'"
+  },
+  "icons": {
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  }
+}
