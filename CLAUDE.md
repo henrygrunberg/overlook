@@ -35,7 +35,7 @@ Node 24+ (`engines`). The first e2e run needs `npx playwright install chromium`.
 - `public/`: `manifest.json`, `private-rules.json` (the static declarativeNetRequest rules), `icons/` (the PNGs), `backgrounds/` (photos, thumbs and `CREDITS.txt`, the Unsplash notice that ships in the zip), `wallpapers/` (the user's own frames and manifest, git-ignored).
 - `tests/unit/`: the Vitest tests, one per module at the same path as in `src/` (`src/ui/panel.ts` → `tests/unit/ui/panel.test.ts`), and `fixtures/`: `sample-library.ts`, `memory-storage.ts` (a storage area with `onChanged`, which, like Chromium, hands listeners a copy with its keys sorted) and `web-locks.ts` (happy-dom has no `navigator.locks`; it's a `setupFiles` entry). The config restores mocks, stubbed globals and env before each test, so tests don't clean those up by hand, and a stub made outside a test or hook never reaches a test: stub in `beforeEach` or the test itself.
 - `tests/e2e/`: Playwright fixtures, a fake-site server, sample bookmarks, the specs and `preview.ts`. `appearance.spec.ts` measures contrast from screenshots (text, focus rings, the search results and the clock) on every bundled photo and on drawn uploads (white, pale, mid-grey, sky blue, a bright corner behind the clock), and checks forced-colors mode and the cross-fade; it runs in CI.
-- `.github/`: CI and release workflows, the `package-extension` action, Dependabot, SECURITY.md and `screenshot.jpg` (the README image).
+- `.github/`: CI and release workflows, the `package-extension` action, Dependabot, SECURITY.md and `screenshot.png` (the README image).
 
 Generated files that are committed, with no generator in the repo:
 
@@ -53,7 +53,7 @@ Generated files that are committed, with no generator in the repo:
 - **Test data stays neutral** ("Acme", "Work", example.com). The repo is public.
 - **Never commit `public/wallpapers/`**: the frames are usually Apple's artwork, and the folder is git-ignored.
 - **Permissions:** if you change `public/manifest.json` permissions, update the permissions table in README.md.
-- **Keyboard shortcuts:** the README table mirrors `src/ui/shortcuts.ts`, `src/ui/spotlight.ts` and `src/ui/navigation.ts`. Update it with them.
+- **Keyboard shortcuts:** README's "Using Overlook" names the main keys from `src/ui/shortcuts.ts`, `src/ui/spotlight.ts` and `src/ui/navigation.ts`. Keep it true when they change.
 - **Wallpaper manifest:** README's "Dynamic wallpaper" section documents the format `parseManifest` accepts. Change them together.
 
 ## Gotchas
