@@ -55,6 +55,8 @@ interface Tag {
   readonly name: string;
   readonly isEnd: boolean;
   readonly attributes: string;
+  /** What a script, style or other raw-text element holds; empty for every other tag. */
+  readonly text: string;
 }
 
 const QUOTED_VALUE = /=\s*(?:"[^"]*"|'[^']*')/y;
@@ -90,21 +92,21 @@ function* tags(html: string): Generator<Tag> {
     }
     const end = tagEnd(html, TAG_NAME.lastIndex);
     if (end === -1) return;
-    const [, slash, name = ""] = match;
-    const tag = {
-      name: name.toLowerCase(),
-      isEnd: slash === "/",
-      attributes: html.slice(TAG_NAME.lastIndex, end),
-    };
-    yield tag;
+    const [, slash, rawName = ""] = match;
+    const name = rawName.toLowerCase();
+    const isEnd = slash === "/";
+    const attributes = html.slice(TAG_NAME.lastIndex, end);
     at = end + 1;
-    const rawTextEnd = tag.isEnd ? undefined : RAW_TEXT_END.get(tag.name);
-    if (rawTextEnd) {
-      rawTextEnd.lastIndex = at;
-      const close = rawTextEnd.exec(html);
-      if (!close) return;
-      at = close.index;
+    const rawTextEnd = isEnd ? undefined : RAW_TEXT_END.get(name);
+    if (!rawTextEnd) {
+      yield { name, isEnd, attributes, text: "" };
+      continue;
     }
+    rawTextEnd.lastIndex = at;
+    const close = rawTextEnd.exec(html);
+    yield { name, isEnd, attributes, text: close ? html.slice(at, close.index) : "" };
+    if (!close) return;
+    at = close.index;
   }
 }
 
@@ -173,6 +175,64 @@ function hasGeneralPurpose(purpose: unknown): boolean {
   if (typeof purpose !== "string") return true;
   const purposes = purpose.toLowerCase().split(/\s+/).filter(Boolean);
   return purposes.length === 0 || purposes.some((name) => GENERAL_PURPOSES.has(name));
+}
+
+const REFRESH_URL = /^\s*[\d.]*\s*[;,]\s*url\s*=\s*(["']?)([^"']*)\1/i;
+const SCRIPT_REDIRECT =
+  /(?:^|[^\w$.])(?:(?:window|document|top|self)\.)?location(?:(?:\.href)?\s*=\s*|\.(?:replace|assign)\(\s*)(["'`])([^"'`\\\n]*)\1/;
+
+// Comments removed, strings kept: "//" inside a quoted URL isn't a comment. Linear.
+function withoutComments(script: string): string {
+  let kept = "";
+  let at = 0;
+  while (at < script.length) {
+    const char = script[at] ?? "";
+    if (char === '"' || char === "'" || char === "`") {
+      let end = at + 1;
+      while (end < script.length && script[end] !== char && script[end] !== "\n") {
+        end += script[end] === "\\" ? 2 : 1;
+      }
+      kept += script.slice(at, end + 1);
+      at = end + 1;
+    } else if (script.startsWith("//", at)) {
+      const end = script.indexOf("\n", at);
+      at = end === -1 ? script.length : end;
+    } else if (script.startsWith("/*", at)) {
+      const end = script.indexOf("*/", at + 2);
+      at = end === -1 ? script.length : end + 2;
+    } else {
+      kept += char;
+      at++;
+    }
+  }
+  return kept;
+}
+
+/**
+ * Where a page sends the browser by a meta refresh or a script that sets the location to a fixed
+ * address: placeholder home pages do this, and Overlook runs no scripts to follow them.
+ */
+export function findRedirect(html: string, pageUrl: string): string | null {
+  let baseHref: string | undefined;
+  let target: string | undefined;
+  for (const tag of tags(html)) {
+    if (tag.isEnd) continue;
+    if (tag.name === "base") baseHref ??= parseAttributes(tag.attributes).get("href");
+    if (target !== undefined) continue;
+    if (tag.name === "meta") {
+      const attributes = parseAttributes(tag.attributes);
+      if (attributes.get("http-equiv")?.toLowerCase() === "refresh") {
+        const address = REFRESH_URL.exec(attributes.get("content") ?? "")?.[2]?.trim();
+        if (address) target = address;
+      }
+    } else if (tag.name === "script") {
+      const address = SCRIPT_REDIRECT.exec(withoutComments(tag.text))?.[2];
+      if (address !== undefined && !address.includes("${")) target = address;
+    }
+  }
+  if (target === undefined) return null;
+  const base = (baseHref === undefined ? null : resolveHttpUrl(baseHref, pageUrl)) ?? pageUrl;
+  return resolveHttpUrl(target, base);
 }
 
 export function findManifestIcons(manifest: unknown, manifestUrl: string): IconCandidate[] {

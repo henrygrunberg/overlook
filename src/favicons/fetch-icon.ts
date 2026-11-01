@@ -4,6 +4,7 @@ import {
   conventionalIcons,
   findManifestIcons,
   findPageIcons,
+  findRedirect,
   hasHeadEnded,
   rankIcons,
   type IconCandidate,
@@ -210,18 +211,32 @@ function isOnSite(pageUrl: string, origin: string): boolean {
   return bareHost(pageUrl) === bareHost(origin);
 }
 
+async function pageCandidates(
+  fetchImpl: Fetch,
+  page: DownloadResult<string>,
+  origin: string,
+  mayFollow: boolean,
+): Promise<readonly IconCandidate[]> {
+  if (typeof page === "string" || !page.type.includes("html") || !isOnSite(page.url, origin)) {
+    return [];
+  }
+  const { icons, manifestUrl } = findPageIcons(page.body, page.url);
+  if (manifestUrl) return [...icons, ...(await fetchManifestIcons(fetchImpl, manifestUrl, origin))];
+  if (icons.length > 0 || !mayFollow) return icons;
+  // A placeholder page with nothing but a redirect (by script or meta refresh) is followed once.
+  const target = findRedirect(page.body, page.url);
+  if (target === null || !isOnSite(target, origin)) return [];
+  const next = await get(fetchImpl, target, origin, "text/html", readHead);
+  return pageCandidates(fetchImpl, next, origin, false);
+}
+
 export async function discoverIcons(
   origin: string,
   fetchImpl: Fetch,
 ): Promise<IconCandidate[] | "unreachable"> {
   const page = await get(fetchImpl, `${origin}/`, origin, "text/html", readHead);
   if (page === "unreachable" && !(await isReachable(origin, fetchImpl))) return "unreachable";
-  const candidates: IconCandidate[] = [];
-  if (typeof page !== "string" && page.type.includes("html") && isOnSite(page.url, origin)) {
-    const { icons, manifestUrl } = findPageIcons(page.body, page.url);
-    candidates.push(...icons);
-    if (manifestUrl) candidates.push(...(await fetchManifestIcons(fetchImpl, manifestUrl, origin)));
-  }
+  const candidates = await pageCandidates(fetchImpl, page, origin, true);
   return rankIcons([...candidates, ...conventionalIcons(origin)]).filter((candidate) =>
     isPermittedIconUrl(candidate.url, origin),
   );

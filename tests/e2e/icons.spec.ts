@@ -262,6 +262,21 @@ test.describe("site icons", () => {
     ).toEqual([]);
   });
 
+  test("follows a placeholder home page's script redirect to its icon", async ({
+    newTab,
+    fakeSites,
+  }) => {
+    const url = await fakeSites.add({
+      html: "<head><title>Untitled</title></head><script>window.location = '/app/home';</script>",
+      pages: { "/app/home": '<head><link rel="icon" sizes="192x192" href="/app-icon.png"></head>' },
+      files: { "/app-icon.png": solidPng(192, [20, 120, 220, 255]) },
+    });
+    await seedBookmarks(newTab, [{ title: "Old portal", url }]);
+
+    await expect(cardTile(newTab, "Old portal").locator("img")).toHaveAttribute("src", /^blob:/);
+    expect(requestsFor(fakeSites, url, "/app-icon.png")).toHaveLength(1);
+  });
+
   test("shows a letter instead of a blurry 16px favicon", async ({ newTab, fakeSites }) => {
     const url = await fakeSites.add({
       html: '<head><link rel="icon" href="/tiny.png"></head>',

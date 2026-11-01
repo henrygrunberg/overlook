@@ -32,7 +32,7 @@ To build it yourself instead, install Node.js 24 or newer, run `npm ci` and `npm
 
 ## Using Overlook
 
-Start typing anywhere to search. `↑` `↓` and `Enter` open a result, `Tab` searches inside a folder and `Esc` backs out. ☆ pins a bookmark to Home. Settings (top right, or `,`) has the background, Home, labels and icons. Shortcuts use `⌘` on a Mac and `Ctrl` elsewhere.
+Start typing anywhere to search. `↑` `↓` and `Enter` open a result, `Tab` searches inside a folder and `Esc` backs out. ☆ pins a bookmark to Home. Settings (top right, or `,`) has the background, Home, labels and icons. To type a web address instead, `⌘L` jumps to the address bar. Shortcuts use `⌘` on a Mac and `Ctrl` elsewhere.
 
 ## Dynamic wallpaper (optional)
 

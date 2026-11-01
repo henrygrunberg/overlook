@@ -3,6 +3,7 @@ import {
   conventionalIcons,
   findManifestIcons,
   findPageIcons,
+  findRedirect,
   hasHeadEnded,
   largestDeclaredSize,
   rankIcons,
@@ -132,6 +133,61 @@ describe("hasHeadEnded", () => {
     ["<head><!---></head>", true],
   ])("%s → %s", (html, expected) => {
     expect(hasHeadEnded(html)).toBe(expected);
+  });
+});
+
+describe("findRedirect", () => {
+  const SITE_PAGE = "https://example.com/";
+
+  it.each([
+    ['<meta http-equiv="refresh" content="0; url=/start">', "https://example.com/start"],
+    ["<META HTTP-EQUIV=Refresh CONTENT=\"5;URL='next.html'\">", "https://example.com/next.html"],
+    ["<script>window.location = '/a';</script>", "https://example.com/a"],
+    ['<script>document.location.href="/b"</script>', "https://example.com/b"],
+    ["<script>location.replace(`/c`)</script>", "https://example.com/c"],
+    ["<script>top.location.assign('https://example.com/d')</script>", "https://example.com/d"],
+    ["<script>self.location='http://example.com/e'</script>", "http://example.com/e"],
+    ["<head><base href='/app/'></head><script>location='f'</script>", "https://example.com/app/f"],
+  ])("follows %s", (html, expected) => {
+    expect(findRedirect(html, SITE_PAGE)).toBe(expected);
+  });
+
+  it("reads the redirect of a placeholder page that ends its head before the script", () => {
+    const html = `<html><head><title>Untitled</title></head>
+      <script type=text/javascript>
+        if (cookie) {
+          window.location='/portal/start';
+        }
+        //document.location="http://old.example.org/portal/main";
+      </script></html>`;
+    expect(findRedirect(html, SITE_PAGE)).toBe("https://example.com/portal/start");
+  });
+
+  it.each([
+    ["<script>// window.location = '/commented';\n</script>"],
+    ["<script>/* location.replace('/commented') */</script>"],
+    ["<script>location = `/user/${id}`</script>"],
+    ["<script>location = base + '/start'</script>"],
+    ["<script>window.location = 'javascript:alert(1)'</script>"],
+    ["<script>mylocation = '/not-it'; history.location = '/nor-this'</script>"],
+    ["<p>window.location = '/text-not-script'</p>"],
+    ['<meta http-equiv="refresh" content="30">'],
+    ["<head><title>Plain page</title></head>"],
+  ])("ignores %s", (html) => {
+    expect(findRedirect(html, SITE_PAGE)).toBeNull();
+  });
+
+  it("keeps a string that contains // or /* intact", () => {
+    expect(findRedirect("<script>location = 'https://example.com//x/*y'</script>", SITE_PAGE)).toBe(
+      "https://example.com//x/*y",
+    );
+  });
+
+  it("scans a hostile script in linear time", () => {
+    const script = `<script>${"'location".repeat(100_000)}${"/*".repeat(100_000)}</script>`;
+    const started = performance.now();
+    expect(findRedirect(script, SITE_PAGE)).toBeNull();
+    expect(performance.now() - started).toBeLessThan(1000);
   });
 });
 

@@ -27,6 +27,8 @@ export function solidPng(size: number, rgba: readonly [number, number, number, n
 export interface FakeSite {
   readonly html: string;
   readonly files: Readonly<Record<string, Buffer>>;
+  /** More HTML pages besides "/". */
+  readonly pages?: Readonly<Record<string, string>>;
 }
 
 /** A host name the extension treats as public; the test browser resolves it to 127.0.0.1. */
@@ -51,8 +53,9 @@ export class FakeSites {
 
   add(site: FakeSite): Promise<string> {
     return this.listen("127.0.0.1", (path, response) => {
-      if (path === "/") {
-        response.writeHead(200, { "content-type": "text/html" }).end(site.html);
+      const page = path === "/" ? site.html : site.pages?.[path];
+      if (page !== undefined) {
+        response.writeHead(200, { "content-type": "text/html" }).end(page);
         return;
       }
       const file = site.files[path];

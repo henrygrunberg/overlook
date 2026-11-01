@@ -142,6 +142,46 @@ describe("discoverIcons", () => {
     expect(requested).toEqual([`follow ${SITE}/`]);
   });
 
+  it("follows a placeholder page's script redirect once to find its icons", async () => {
+    const { fetchImpl, requested } = fakeSite({
+      [`${SITE}/`]: respond(
+        "<head><title>Untitled</title></head><script>window.location='/app/home';</script>",
+        HTML,
+      ),
+      [`${SITE}/app/home`]: respond(
+        '<head><link rel="icon" sizes="192x192" href="/img/icon.png"></head>',
+        HTML,
+      ),
+    });
+
+    expect(await candidateUrls(SITE, fetchImpl)).toEqual([
+      `${SITE}/img/icon.png`,
+      `${SITE}/apple-touch-icon.png`,
+      `${SITE}/favicon.ico`,
+    ]);
+    expect(requested).toEqual([`follow ${SITE}/`, `follow ${SITE}/app/home`]);
+  });
+
+  it("doesn't follow a redirect to another host, a second one, or one from a page with icons", async () => {
+    const page = (html: string) => respond(`<head>${html}</head>`, HTML);
+    const redirect = (to: string) => page(`<meta http-equiv="refresh" content="0; url=${to}">`);
+    const { fetchImpl, requested } = fakeSite({
+      [`${SITE}/`]: redirect("https://elsewhere.example.net/"),
+    });
+    await discoverIcons(SITE, fetchImpl);
+    expect(requested).toEqual([`follow ${SITE}/`]);
+
+    const twice = fakeSite({ [`${SITE}/`]: redirect("/one"), [`${SITE}/one`]: redirect("/two") });
+    await discoverIcons(SITE, twice.fetchImpl);
+    expect(twice.requested).toEqual([`follow ${SITE}/`, `follow ${SITE}/one`]);
+
+    const withIcon = fakeSite({
+      [`${SITE}/`]: page('<link rel="icon" href="/own.png"><script>location="/away"</script>'),
+    });
+    expect(await candidateUrls(SITE, withIcon.fetchImpl)).toContain(`${SITE}/own.png`);
+    expect(withIcon.requested).toEqual([`follow ${SITE}/`]);
+  });
+
   it("sends no cookies or referrer", async () => {
     let init: RequestInit | undefined;
     await discoverIcons(SITE, (_input, requestInit) => {
