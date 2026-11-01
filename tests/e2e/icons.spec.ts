@@ -141,34 +141,6 @@ test.describe("site icons", () => {
     await expect(tile).not.toHaveClass(/favicon-tile--monogram/);
   });
 
-  test("forgets the icons of removed bookmarks when the browser starts again", async ({
-    newTab,
-    fakeSites,
-    newTabUrl,
-    restartBrowser,
-  }) => {
-    const keptUrl = await fakeSites.add(touchIconSite);
-    const removedUrl = await fakeSites.add(touchIconSite);
-    const kept = new URL(keptUrl).origin;
-    const removed = new URL(removedUrl).origin;
-    await seedBookmarks(newTab, [
-      { title: "Kept app", url: keptUrl },
-      { title: "Removed app", url: removedUrl },
-    ]);
-    await expect.poll(() => storedStatus(newTab, kept)).toBe("ok");
-    await expect.poll(() => storedStatus(newTab, removed)).toBe("ok");
-
-    await removeBookmark(newTab, removedUrl);
-    // Removing a bookmark deletes nothing by itself: only a full sync prunes.
-    expect(await storedStatus(newTab, removed)).toBe("ok");
-
-    const browser = await restartBrowser();
-    const page = await browser.newPage();
-    await page.goto(newTabUrl);
-    await expect.poll(() => storedStatus(page, removed)).toBeNull();
-    expect(await storedStatus(page, kept)).toBe("ok");
-  });
-
   test("centres icons with transparent corners instead of filling the tile", async ({
     newTab,
     fakeSites,
@@ -208,8 +180,8 @@ test.describe("site icons", () => {
 
   // The real risk is a public site redirecting to a router. All FakeSites listen on 127.0.0.1, so
   // the redirecting site gets a host name the extension sees as public, and the private site
-  // stands in for the router: the redirects reach it, but nothing it answers may be used.
-  test("discards whatever a public site's redirect to a private host returns", async ({
+  // stands in for the router: the browser must cancel every redirect before it reaches it.
+  test("never lets a public site's redirect reach a private host", async ({
     newTab,
     fakeSites,
   }) => {
@@ -226,9 +198,68 @@ test.describe("site icons", () => {
     const origin = new URL(url).origin;
     await expect.poll(() => storedStatus(newTab, origin)).not.toBeNull();
     expect(await storedStatus(newTab, origin)).not.toBe("ok");
-    expect(requestsFor(fakeSites, router, "/")).not.toHaveLength(0);
-    await newTab.reload();
-    await expect(cardTile(newTab, "Redirecting")).toHaveClass(/favicon-tile--monogram/);
+    expect(requestsFor(fakeSites, url, "/")).not.toHaveLength(0);
+    const routerPort = new URL(router).port;
+    expect(fakeSites.requests.filter((request) => request.startsWith(`${routerPort}/`))).toEqual(
+      [],
+    );
+  });
+
+  test("forgets a removed bookmark's icon once the removal settles", async ({
+    newTab,
+    fakeSites,
+  }) => {
+    const keptUrl = await fakeSites.add(touchIconSite);
+    const url = await fakeSites.add(touchIconSite);
+    const kept = new URL(keptUrl).origin;
+    const origin = new URL(url).origin;
+    await seedBookmarks(newTab, [
+      { title: "Kept app", url: keptUrl },
+      { title: "Short-lived", url },
+    ]);
+    await expect.poll(() => storedStatus(newTab, kept)).toBe("ok");
+    await expect.poll(() => storedStatus(newTab, origin)).toBe("ok");
+
+    await removeBookmark(newTab, url);
+    await expect.poll(() => storedStatus(newTab, origin)).toBeNull();
+    expect(await storedStatus(newTab, kept)).toBe("ok");
+  });
+
+  test("gets the icon of an intranet site that moves to another port", async ({
+    newTab,
+    fakeSites,
+  }) => {
+    const movedTo = await fakeSites.add({
+      html: "<title>Acme NAS</title>",
+      files: { "/apple-touch-icon.png": solidPng(180, [0, 90, 200, 255]) },
+    });
+    const url = await fakeSites.addRedirect("127.0.0.1", movedTo);
+    await seedBookmarks(newTab, [{ title: "NAS", url }]);
+
+    await expect.poll(() => storedStatus(newTab, new URL(url).origin)).toBe("ok");
+    expect(requestsFor(fakeSites, movedTo, "/apple-touch-icon.png")).not.toHaveLength(0);
+  });
+
+  // The browser lets the extension reach a bookmarked private site, but can't tell a request
+  // for it from a public site's redirect, so no public site is fetched while that's allowed.
+  test("never lets a public site's redirect reach a bookmarked private site", async ({
+    newTab,
+    fakeSites,
+  }) => {
+    const router = await fakeSites.add(touchIconSite);
+    const url = await fakeSites.addRedirect(PUBLIC_LOOKING_HOST, `${router}from-public/`);
+    await seedBookmarks(newTab, [
+      { title: "Router", url: router },
+      { title: "Redirecting", url },
+    ]);
+
+    await expect.poll(() => storedStatus(newTab, new URL(router).origin)).toBe("ok");
+    await expect.poll(() => storedStatus(newTab, new URL(url).origin)).not.toBeNull();
+    expect(requestsFor(fakeSites, url, "/")).not.toHaveLength(0);
+    const routerPort = new URL(router).port;
+    expect(
+      fakeSites.requests.filter((request) => request.startsWith(`${routerPort}/from-public/`)),
+    ).toEqual([]);
   });
 
   test("shows a letter instead of a blurry 16px favicon", async ({ newTab, fakeSites }) => {

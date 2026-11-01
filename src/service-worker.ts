@@ -2,11 +2,12 @@ import { buildLibrary } from "./bookmarks/library";
 import { isIconMessage } from "./favicons/icon-messages";
 import { IconSync } from "./favicons/icon-sync";
 import { warnOnFailure } from "./log";
+import { WALLPAPER_INSTALLED_KEY, WALLPAPER_MANIFEST_PATH } from "./wallpaper/wallpaper-flag";
 
 const icons = new IconSync();
 // Chrome stops idle service workers after 30 s and fetches don't count; extension API calls do.
 const KEEP_ALIVE_MS = 20_000;
-// An import or a first Sync creates bookmarks in bursts; they're synced together once it settles.
+// A first Sync creates bookmarks in bursts; they're synced together once it settles.
 const BOOKMARK_QUIET_MS = 1000;
 
 let runningWork = 0;
@@ -25,18 +26,21 @@ function run(work: () => Promise<void>): void {
     });
 }
 
-async function allBookmarkUrls(): Promise<string[]> {
-  return buildLibrary(await chrome.bookmarks.getTree()).bookmarks.map((bookmark) => bookmark.url);
+async function readBookmarkUrls(): Promise<string[]> {
+  const library = buildLibrary(await chrome.bookmarks.getTree());
+  return library.bookmarks.map((bookmark) => bookmark.url);
 }
 
 function syncAllBookmarks(): void {
   run(async () => {
-    await icons.ensure(await allBookmarkUrls());
-    // Bookmarks can change during a sync that takes minutes. An empty read deletes nothing:
-    // losing every icon to one bad read costs more than keeping a few stale ones.
-    const current = await allBookmarkUrls();
-    if (current.length > 0) await icons.pruneExcept(current);
+    await icons.ensure(await readBookmarkUrls());
+    // Bookmarks can change during a sync that takes minutes.
+    await icons.pruneExcept(await readBookmarkUrls());
   });
+}
+
+function syncIcons(urls: readonly string[], force = false): void {
+  run(() => icons.ensure(urls, force));
 }
 
 let importing = false;
@@ -50,18 +54,27 @@ function syncSoon(url: string): void {
   flushTimer = setTimeout(() => {
     const urls = [...changedUrls];
     changedUrls.clear();
-    run(() => icons.ensure(urls));
+    syncIcons(urls);
+  }, BOOKMARK_QUIET_MS);
+}
+
+let pruneTimer: ReturnType<typeof setTimeout> | undefined;
+
+function pruneSoon(): void {
+  clearTimeout(pruneTimer);
+  pruneTimer = setTimeout(() => {
+    run(async () => icons.pruneExcept(await readBookmarkUrls()));
   }, BOOKMARK_QUIET_MS);
 }
 
 // Pages fetch the wallpaper manifest only when this says it exists: a missing extension file
 // can't be fetched quietly, and every new tab would log a network error.
 async function checkForWallpaper(): Promise<void> {
-  const wallpaperInstalled = await fetch("wallpapers/manifest.json").then(
+  const installed = await fetch(WALLPAPER_MANIFEST_PATH).then(
     (response) => response.ok,
     () => false,
   );
-  await chrome.storage.local.set({ wallpaperInstalled });
+  await chrome.storage.local.set({ [WALLPAPER_INSTALLED_KEY]: installed });
 }
 
 function onInstallOrStartup(): void {
@@ -83,10 +96,13 @@ chrome.bookmarks.onCreated.addListener((_id, bookmark) => {
   if (bookmark.url) syncSoon(bookmark.url);
 });
 chrome.bookmarks.onChanged.addListener((_id, change) => {
-  if (change.url) syncSoon(change.url);
+  if (!change.url) return;
+  syncSoon(change.url);
+  pruneSoon();
 });
+chrome.bookmarks.onRemoved.addListener(pruneSoon);
 
 chrome.runtime.onMessage.addListener((message: unknown, sender) => {
   if (sender.id !== chrome.runtime.id || !isIconMessage(message)) return;
-  run(() => icons.ensure(message.urls, message.type === "refresh-icons"));
+  syncIcons(message.urls, message.type === "refresh-icons");
 });

@@ -1,5 +1,5 @@
-import { expect, test } from "./fixtures.ts";
-import type { Page } from "@playwright/test";
+import { expect, seedBookmarks, test } from "./fixtures.ts";
+import type { Locator, Page } from "@playwright/test";
 
 const searchBox = (page: Page) => page.getByRole("combobox");
 const options = (page: Page) => page.getByRole("option");
@@ -62,6 +62,31 @@ test.describe("Spotlight search", () => {
       .toEqual([false]);
     await expect(searchBox(newTab)).toHaveValue("gear shop");
   });
+
+  const doubleClicks: [string, Parameters<Locator["dblclick"]>[0]][] = [
+    ["⌘/Ctrl-double-click", { modifiers: ["ControlOrMeta"] }],
+    ["middle double-click", { button: "middle" }],
+  ];
+  for (const [gesture, clickOptions] of doubleClicks) {
+    test(`opens one background tab on a ${gesture}`, async ({ newTab }) => {
+      const tabsOpening = (prefix: string) =>
+        newTab.evaluate(
+          async (prefix) =>
+            (await chrome.tabs.query({})).filter((tab) =>
+              (tab.pendingUrl ?? tab.url)?.startsWith(prefix),
+            ).length,
+          prefix,
+        );
+      await searchBox(newTab).fill("gear shop");
+      await newTab.getByRole("option", { name: /Gear shop/ }).dblclick(clickOptions);
+      // Opened after both clicks were handled, so once it shows, a second gear tab would have too.
+      await searchBox(newTab).fill("trail map");
+      await searchBox(newTab).press("ControlOrMeta+Enter");
+      await expect.poll(() => tabsOpening("https://trails.example.com")).toBe(1);
+
+      expect(await tabsOpening("https://gear.example.com")).toBe(1);
+    });
+  }
 
   test("narrows the search to a folder with Tab and leaves it with Backspace", async ({
     newTab,
@@ -147,5 +172,99 @@ test.describe("Spotlight search", () => {
     await expect(options(newTab).first()).toContainText("<img src=x");
     await expect(newTab.locator(".spotlight img[src='x']")).toHaveCount(0);
     expect(await newTab.title()).toBe("New Tab");
+  });
+
+  test("opens an exact bookmark match with Enter, not a folder that matches less well", async ({
+    newTab,
+  }) => {
+    await seedBookmarks(newTab, [
+      { title: "News", url: "https://news.example.com/" },
+      {
+        title: "Networks & Systems",
+        children: [{ title: "Router", url: "https://router.example.com/" }],
+      },
+    ]);
+    const box = searchBox(newTab);
+    await box.fill("news");
+    await expect(options(newTab)).toContainText(["Networks & Systems", "News"]);
+    await expect(newTab.getByRole("option", { selected: true })).toContainText("News");
+    await box.press("Enter");
+    await expect(newTab).toHaveURL("https://news.example.com/");
+  });
+
+  test("brings the first results into view in a short window", async ({ newTab }) => {
+    await newTab.setViewportSize({ width: 320, height: 256 });
+    await searchBox(newTab).focus();
+    await newTab.keyboard.type("g");
+    const selected = newTab.getByRole("option", { selected: true });
+    await expect(selected).toBeVisible();
+    const { bottom, height } = await selected.evaluate((option) => ({
+      bottom: option.getBoundingClientRect().bottom,
+      height: window.innerHeight,
+    }));
+    // Scrolling lands on whole pixels, so the row can end a fraction below the window.
+    expect(bottom).toBeLessThan(height + 1);
+  });
+
+  test("leaves the field for the panel's title, never the page, on Escape", async ({ newTab }) => {
+    await newTab.locator("body").click({ position: { x: 5, y: 5 } });
+    await newTab.keyboard.press("/");
+    await expect(searchBox(newTab)).toBeFocused();
+    await newTab.keyboard.press("Escape");
+    await expect(newTab.locator(".panel__title")).toBeFocused();
+
+    await newTab.keyboard.press(",");
+    await expect(newTab.getByRole("dialog", { name: "Settings" })).toBeVisible();
+  });
+
+  test("shows the group's heading again when the selection wraps round", async ({ newTab }) => {
+    await seedBookmarks(
+      newTab,
+      Array.from({ length: 12 }, (_, index) => ({
+        title: `Acme item ${index + 1}`,
+        url: `https://item${index + 1}.example.com/`,
+      })),
+    );
+    await newTab.setViewportSize({ width: 1440, height: 500 });
+    const box = searchBox(newTab);
+    await box.fill("acme");
+    await expect(options(newTab)).not.toHaveCount(0);
+    const last = options(newTab).last();
+    for (let step = 0; (await last.getAttribute("aria-selected")) !== "true"; step++) {
+      expect(step).toBeLessThan(50);
+      await box.press("ArrowDown");
+    }
+    await box.press("ArrowDown");
+    await expect(options(newTab).first()).toHaveAttribute("aria-selected", "true");
+    expect(await newTab.locator(".spotlight__listbox").evaluate((list) => list.scrollTop)).toBe(0);
+  });
+
+  test("opens an empty subfolder as its own view", async ({ newTab }) => {
+    await newTab.evaluate(async () => {
+      const [work] = await chrome.bookmarks.search({ title: "Work" });
+      if (work) await chrome.bookmarks.create({ parentId: work.id, title: "Archive" });
+    });
+    await searchBox(newTab).fill("archive");
+    await expect(options(newTab).first()).toContainText("Archive");
+    await searchBox(newTab).press("Enter");
+
+    const panel = newTab.getByRole("main");
+    await expect(panel.getByRole("heading", { level: 2 })).toHaveText("Work › Archive");
+    await expect(panel.getByText("This folder is empty.")).toBeVisible();
+  });
+
+  test("keeps a label chip in view on a search result with a long path", async ({ newTab }) => {
+    await newTab.setViewportSize({ width: 320, height: 700 });
+    await searchBox(newTab).fill("grafana");
+    const rows = newTab.locator(".spotlight__option:has(.chip)");
+    await expect(rows).toHaveCount(2);
+    for (const row of await rows.all()) {
+      const fits = await row.evaluate((option) => {
+        const chip = option.querySelector(".chip")?.getBoundingClientRect();
+        const detail = option.querySelector(".spotlight__option-detail")?.getBoundingClientRect();
+        return chip !== undefined && detail !== undefined && chip.right <= detail.right;
+      });
+      expect(fits).toBe(true);
+    }
   });
 });

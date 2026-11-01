@@ -16,7 +16,7 @@ runs:
         cp -R dist/. LICENSE package/overlook/
         (cd package && zip -qr "../$ARCHIVE" overlook)
         listing="$(unzip -Z1 "$ARCHIVE")"
-        for required in manifest.json LICENSE; do
+        for required in manifest.json LICENSE backgrounds/CREDITS.txt; do
           if ! grep -qx "overlook/$required" <<< "$listing"; then
             echo "::error::The zip has no overlook/$required"
             exit 1

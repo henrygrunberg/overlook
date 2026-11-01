@@ -1,4 +1,4 @@
-import { dispositionFor, type Disposition } from "./navigation";
+import { dispositionFor, isRepeatClick, type Disposition } from "./navigation";
 import { isPanelAction, type PanelAction } from "./panel";
 
 export interface PanelEventActions {
@@ -22,7 +22,7 @@ export function bindPanelEvents(panel: HTMLElement, actions: PanelEventActions):
     }
     const url = linkUrl(event);
     if (!url) return;
-    if (favouriteCard(event)) {
+    if (favouriteCard(event) || isRepeatClick(event)) {
       event.preventDefault();
       return;
     }
@@ -34,7 +34,7 @@ export function bindPanelEvents(panel: HTMLElement, actions: PanelEventActions):
     const url = linkUrl(event);
     if (!url || event.button !== 1) return;
     event.preventDefault();
-    if (!favouriteCard(event)) actions.open(url, "background-tab");
+    if (!favouriteCard(event) && !isRepeatClick(event)) actions.open(url, "background-tab");
   });
   bindFavouriteDrag(panel, actions.moveFavourite);
 }

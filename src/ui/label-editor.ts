@@ -4,11 +4,22 @@ import {
   MAX_LABEL_LENGTH,
   MAX_LABELS,
   parseHostPatterns,
+  type LabelColor,
   type LabelRule,
 } from "../settings/settings";
-import { h } from "./dom";
+import { h, reconcileChildren } from "./dom";
 import { icon } from "./icons";
+import { chipClass, labelChip } from "./link-card";
 import { countOf } from "./text";
+
+const COLOUR_NAMES: Record<LabelColor, string> = {
+  green: "Green",
+  blue: "Blue",
+  orange: "Orange",
+  purple: "Purple",
+  red: "Red",
+  gray: "Grey",
+};
 
 const addressCount = (count: number) => countOf(count, "address", "addresses");
 
@@ -29,6 +40,18 @@ export function addHosts(hosts: readonly string[], text: string): string[] {
   return merged.slice(0, MAX_HOST_PATTERNS);
 }
 
+interface Row {
+  readonly label: LabelRule;
+  readonly isOpen: boolean;
+  readonly element: HTMLElement;
+}
+
+// Identifies a control across a row's rebuild; the Edit button's name changes with the label's.
+const controlKey = (control: Element) =>
+  control.matches(".label-row__toggle")
+    ? "toggle"
+    : `${control.className} ${control.getAttribute("aria-label") ?? ""}`;
+
 export class LabelEditor {
   readonly element: HTMLElement;
   private readonly list = h("div", { className: "label-list" });
@@ -42,24 +65,25 @@ export class LabelEditor {
     text: `That's the limit of ${MAX_LABELS} labels.`,
     attributes: { id: LIMIT_HINT_ID },
   });
-  private labels: LabelRule[];
+  private current: LabelRule[];
+  private rows = new Map<string, Row>();
   private openId: string | null = null;
 
   constructor(
     initial: readonly LabelRule[],
     private readonly onChange: (labels: readonly LabelRule[]) => void,
   ) {
-    this.labels = [...initial];
+    this.current = [...initial];
     this.addButton.addEventListener("click", () => {
       const label: LabelRule = {
         id: crypto.randomUUID(),
         text: "Label",
-        color: LABEL_COLORS[this.labels.length % LABEL_COLORS.length] ?? "gray",
+        color: LABEL_COLORS[this.current.length % LABEL_COLORS.length] ?? "gray",
         privateNetwork: false,
         hosts: [],
       };
-      this.labels.push(label);
-      this.onChange(this.labels);
+      this.current.push(label);
+      this.onChange(this.current);
       this.openId = label.id;
       this.render();
       this.list.querySelector<HTMLInputElement>(".label-editor__name")?.select();
@@ -72,24 +96,89 @@ export class LabelEditor {
     this.render();
   }
 
+  get labels(): readonly LabelRule[] {
+    return this.current;
+  }
+
+  /** Rebuilds only the rows whose label changed, keeping focus and half-typed text in them. */
+  show(labels: readonly LabelRule[]): void {
+    this.current = [...labels];
+    this.render();
+  }
+
   private update(id: string, changes: Partial<LabelRule>): LabelRule | undefined {
-    const index = this.labels.findIndex((label) => label.id === id);
-    const current = this.labels[index];
-    if (!current) return undefined;
+    const index = this.current.findIndex((label) => label.id === id);
+    const current = this.current[index];
+    const row = this.rows.get(id);
+    if (!current || !row) return undefined;
     const next = { ...current, ...changes };
-    this.labels[index] = next;
-    this.onChange(this.labels);
+    this.current[index] = next;
+    this.rows.set(id, { ...row, label: next });
+    this.onChange(this.current);
     return next;
   }
 
   private render(): void {
-    this.list.replaceChildren(...this.labels.map((label) => this.row(label)));
-    const full = this.labels.length >= MAX_LABELS;
+    const focused = document.activeElement;
+    const previous = this.rows;
+    const previousIds = [...previous.keys()];
+    const focusedIndex = previousIds.findIndex((id) => previous.get(id)?.element.contains(focused));
+    const focusedRowId = previousIds[focusedIndex];
+    // Chromium blurs a field as it is removed, and the address field's blur commits and clears it.
+    const typed =
+      focused instanceof HTMLInputElement
+        ? { value: focused.value, start: focused.selectionStart, end: focused.selectionEnd }
+        : undefined;
+    this.rows = new Map(
+      this.current.map((label) => {
+        const isOpen = this.openId === label.id;
+        const kept = previous.get(label.id);
+        const row =
+          kept?.label === label && kept.isOpen === isOpen
+            ? kept
+            : { label, isOpen, element: this.row(label, isOpen) };
+        return [label.id, row];
+      }),
+    );
+    reconcileChildren(
+      this.list,
+      [...this.rows.values()].map((row) => row.element),
+    );
+    if (focusedRowId !== undefined && focused instanceof HTMLElement && !focused.isConnected) {
+      this.refocus(focused, this.rows.get(focusedRowId)?.element, focusedIndex, typed);
+    }
+
+    const full = this.current.length >= MAX_LABELS;
     this.addButton.disabled = full;
     this.limitHint.hidden = !full;
     // A description is read even from a hidden element, so link the hint only while it shows.
     if (full) this.addButton.setAttribute("aria-describedby", LIMIT_HINT_ID);
     else this.addButton.removeAttribute("aria-describedby");
+  }
+
+  private refocus(
+    lost: HTMLElement,
+    row: HTMLElement | undefined,
+    index: number,
+    typed: { value: string; start: number | null; end: number | null } | undefined,
+  ): void {
+    if (!row) {
+      const next = this.list.querySelectorAll<HTMLButtonElement>(".label-row__toggle")[index];
+      (next ?? this.addButton).focus();
+      return;
+    }
+    const key = controlKey(lost);
+    const control =
+      [...row.querySelectorAll<HTMLElement>("input, button")].find(
+        (candidate) => controlKey(candidate) === key,
+      ) ?? row.querySelector<HTMLElement>(".label-row__toggle");
+    control?.focus();
+    // The only text not yet in the label: an address typed but not added.
+    if (control instanceof HTMLInputElement && typed) {
+      if (!control.matches(".host-input__field")) return;
+      control.value = typed.value;
+      control.setSelectionRange(typed.start, typed.end);
+    }
   }
 
   private toggle(id: string): void {
@@ -100,10 +189,9 @@ export class LabelEditor {
       ?.focus();
   }
 
-  private row(label: LabelRule): HTMLElement {
-    const isOpen = this.openId === label.id;
+  private row(label: LabelRule, isOpen: boolean): HTMLElement {
     const panelId = `label-panel-${label.id}`;
-    const chip = h("span", { className: `chip chip--${label.color}`, text: label.text });
+    const chip = labelChip(label);
     const summary = h("span", { className: "label-row__summary", text: labelSummary(label) });
     const toggle = h(
       "button",
@@ -112,7 +200,7 @@ export class LabelEditor {
         attributes: {
           type: "button",
           "aria-expanded": String(isOpen),
-          "aria-controls": panelId,
+          ...(isOpen ? { "aria-controls": panelId } : {}),
           "aria-label": `${isOpen ? "Done editing" : "Edit"} label ${label.text}`,
         },
       },
@@ -122,10 +210,12 @@ export class LabelEditor {
       this.toggle(label.id);
     });
 
+    // A row replaced by show() can still report its field's blur; its label is gone from the list.
     const edit: LabelEdit = (changes) => {
+      if (this.rows.get(label.id)?.element !== row) return;
       const current = this.update(label.id, changes);
       if (!current) return;
-      chip.className = `chip chip--${current.color}`;
+      chip.className = chipClass(current);
       chip.textContent = current.text;
       summary.textContent = labelSummary(current);
       toggle.setAttribute("aria-label", `Done editing label ${current.text}`);
@@ -169,7 +259,7 @@ export class LabelEditor {
     });
     name.addEventListener("blur", () => {
       if (!name.value.trim()) {
-        name.value = this.labels.find((other) => other.id === label.id)?.text ?? label.text;
+        name.value = this.current.find((other) => other.id === label.id)?.text ?? label.text;
       }
     });
 
@@ -186,7 +276,7 @@ export class LabelEditor {
             type: "radio",
             name: `label-colour-${label.id}`,
             value: color,
-            "aria-label": color,
+            "aria-label": COLOUR_NAMES[color],
             ...(color === label.color ? { checked: "" } : {}),
           },
         });
@@ -230,32 +320,35 @@ export class LabelEditor {
       input.value = "";
       if (text.trim()) save(addHosts(hosts, text));
     };
-    const renderChips = () => {
-      chips.replaceChildren(
-        ...hosts.map((host) => {
-          const remove = h(
-            "button",
-            {
-              className: "host-chip__remove",
-              attributes: { type: "button", "aria-label": `Remove ${host}` },
-            },
-            [icon("close")],
-          );
-          // Keeps focus in the text field: a blur there would commit its text and rebuild the
-          // chips under the pointer, swallowing this click.
-          remove.addEventListener("pointerdown", (event) => {
-            event.preventDefault();
-          });
-          remove.addEventListener("click", () => {
-            save(hosts.filter((other) => other !== host));
-            input.focus();
-          });
-          return h("li", { className: "host-chip" }, [
-            h("span", { className: "host-chip__text", text: host }),
-            remove,
-          ]);
-        }),
+    const hostChip = (host: string) => {
+      const remove = h(
+        "button",
+        {
+          className: "host-chip__remove",
+          attributes: { type: "button", "aria-label": `Remove ${host}` },
+        },
+        [icon("close")],
       );
+      // Keeps focus in the text field: a blur there would commit its text and rebuild the chips
+      // under the pointer, swallowing this click.
+      remove.addEventListener("pointerdown", (event) => {
+        event.preventDefault();
+      });
+      remove.addEventListener("click", () => {
+        save(hosts.filter((other) => other !== host));
+        input.focus();
+      });
+      return h("li", { className: "host-chip" }, [
+        h("span", { className: "host-chip__text", text: host }),
+        remove,
+      ]);
+    };
+    // Chips are kept across renders: Shift+Tab out of a half-typed address commits it, and a
+    // rebuilt chip would drop the focus heading for its Remove button.
+    let chipFor = new Map<string, HTMLElement>();
+    const renderChips = () => {
+      chipFor = new Map(hosts.map((host) => [host, chipFor.get(host) ?? hostChip(host)]));
+      reconcileChildren(chips, [...chipFor.values()]);
       // Read-only rather than disabled, so a field that fills up keeps keyboard focus.
       const full = hosts.length >= MAX_HOST_PATTERNS;
       input.readOnly = full;
@@ -338,14 +431,18 @@ export class LabelEditor {
   }
 
   private delete(id: string): void {
-    const index = this.labels.findIndex((label) => label.id === id);
-    const label = this.labels[index];
+    const index = this.current.findIndex((label) => label.id === id);
+    const label = this.current[index];
     if (!label) return;
-    const confirmation = `Delete ${label.text} and its ${addressCount(label.hosts.length)}?`;
-    if (label.hosts.length > 0 && !window.confirm(confirmation)) return;
+    const tagged = [
+      label.privateNetwork && "private-network addresses",
+      label.hosts.length > 0 && addressCount(label.hosts.length),
+    ].filter((part) => part !== false);
+    const confirmation = `Delete ${label.text} and its ${tagged.join(" and ")}?`;
+    if (tagged.length > 0 && !window.confirm(confirmation)) return;
 
-    this.labels = this.labels.filter((other) => other !== label);
-    this.onChange(this.labels);
+    this.current = this.current.filter((other) => other !== label);
+    this.onChange(this.current);
     this.openId = null;
     this.render();
     const next = this.list.querySelectorAll<HTMLButtonElement>(".label-row__toggle")[index];

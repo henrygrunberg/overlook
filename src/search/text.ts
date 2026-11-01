@@ -1,5 +1,8 @@
-const COMBINING_MARKS = /\p{M}+/gu;
-const WORD_SEPARATORS = /[^\p{L}\p{N}]+/u;
+// Only accents: elsewhere a mark can make a different word (Devanagari vowel signs, Thai tone
+// marks, Japanese voicing), and an emoji's variation selector is part of the emoji.
+const ACCENTS =
+  /(?<=[\p{Script=Latin}\p{Script=Greek}\p{Script=Cyrillic}\p{Script=Hebrew}\p{Script=Arabic}]\p{M}*)\p{M}+/gu;
+const WORD = /[\p{L}\p{N}][\p{L}\p{M}\p{N}]*/gu;
 // Letters that NFKD keeps whole, so they have no accent to strip.
 const UNDECOMPOSED_LETTERS = new Map([
   ["ß", "ss"],
@@ -20,13 +23,13 @@ const UNDECOMPOSED = new RegExp(`[${[...UNDECOMPOSED_LETTERS.keys()].join("")}]`
 export function normalize(text: string): string {
   return text
     .normalize("NFKD")
-    .replace(COMBINING_MARKS, "")
+    .replace(ACCENTS, "")
     .toLowerCase()
     .replace(UNDECOMPOSED, (letter) => UNDECOMPOSED_LETTERS.get(letter) ?? letter);
 }
 
 export function splitWords(normalized: string): string[] {
-  return normalized.split(WORD_SEPARATORS).filter(Boolean);
+  return normalized.match(WORD) ?? [];
 }
 
 /** "IoT Grafana" → "ig", "LoadTesting" stays one word, so → "l". */

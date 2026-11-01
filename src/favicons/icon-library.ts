@@ -1,9 +1,10 @@
 import { warn, warnOnFailure } from "../log";
 import { isRecord } from "../validation";
-import type { IconMessage } from "./icon-messages";
+import { MAX_MESSAGE_URLS, type IconMessage } from "./icon-messages";
 import {
   ICON_CHANNEL,
   iconOrigin,
+  iconOrigins,
   needsRefresh,
   readAllIcons,
   readIcon,
@@ -78,14 +79,15 @@ export class IconLibrary implements IconSource {
   }
 
   request(pageUrls: readonly string[], force = false): void {
-    const origins = [...new Set(pageUrls.map(iconOrigin))].filter((origin) => origin !== null);
     const now = Date.now();
-    const due = force
-      ? origins
-      : origins.filter((origin) => needsRefresh(this.records.get(origin), now));
-    if (due.length === 0) return;
-    const message: IconMessage = { type: force ? "refresh-icons" : "ensure-icons", urls: due };
-    chrome.runtime.sendMessage(message).catch(warnOnFailure("reach the icon service worker"));
+    const due = [...iconOrigins(pageUrls)].filter(
+      (origin) => force || needsRefresh(this.records.get(origin), now),
+    );
+    const type = force ? "refresh-icons" : "ensure-icons";
+    for (let start = 0; start < due.length; start += MAX_MESSAGE_URLS) {
+      const message: IconMessage = { type, urls: due.slice(start, start + MAX_MESSAGE_URLS) };
+      chrome.runtime.sendMessage(message).catch(warnOnFailure("reach the icon service worker"));
+    }
   }
 
   private imageUrl(record: CachedIcon): string {

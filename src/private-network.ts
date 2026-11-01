@@ -26,3 +26,5 @@ export function isPrivateNetworkHost(hostname: string): boolean {
     PRIVATE_IPV4.test(embeddedIpv4(host) ?? host)
   );
 }
+
+export const isPrivateOrigin = (origin: string) => isPrivateNetworkHost(new URL(origin).hostname);

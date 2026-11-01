@@ -13,7 +13,7 @@ export interface HomeSection {
 }
 
 export type HomeView =
-  | { readonly kind: "sections"; readonly sections: readonly HomeSection[] }
+  | { readonly kind: "sections"; readonly sections: readonly [HomeSection, ...HomeSection[]] }
   | { readonly kind: "folder"; readonly folder: Folder };
 
 function uniqueByUrl(bookmarks: readonly Bookmark[]): Map<string, Bookmark> {
@@ -44,7 +44,12 @@ export function frequentSection(
   return {
     id: "frequent",
     title: frequent.length > 0 ? "Frequent" : "Recently added",
-    note: frequent.length > 0 ? "Your most-used links" : "Your most-used links will show up here",
+    note:
+      frequent.length === 0
+        ? "Your most-used links will show up here"
+        : newest.length > 0
+          ? "Your most-used links, then the newest"
+          : "Your most-used links",
     bookmarks: [...frequent, ...newest],
     emptyText: "No bookmarks yet. Add some in your browser and they will show up here.",
   };
@@ -70,13 +75,15 @@ export function homeView(
     title: "Favourites",
     note: "Pinned by you",
     bookmarks: favourites,
-    emptyText: "Nothing pinned yet. Hover over any bookmark and click ☆ to keep it here.",
+    emptyText: "Nothing pinned yet. Use the ☆ on any bookmark to keep it here.",
   };
+  if (!home.showFrequent) return { kind: "sections", sections: [favouritesSection] };
   const pinnedUrls = new Set(favourites.map((bookmark) => bookmark.url));
+  const frequent = frequentSection(library, usage, pinnedUrls, now);
+  // Empty only because everything is pinned: its "no bookmarks yet" would be wrong.
+  const showFrequent = frequent.bookmarks.length > 0 || favourites.length === 0;
   return {
     kind: "sections",
-    sections: home.showFrequent
-      ? [favouritesSection, frequentSection(library, usage, pinnedUrls, now)]
-      : [favouritesSection],
+    sections: showFrequent ? [favouritesSection, frequent] : [favouritesSection],
   };
 }

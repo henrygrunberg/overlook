@@ -52,8 +52,15 @@ export function parseManifest(value: unknown): WallpaperManifest {
     const entries = schedule.map((entry: unknown): SolarEntry => {
       if (isRecord(entry)) {
         const scheduled = scheduledFrame(entry, frameFiles);
-        if (scheduled && isFiniteNumber(entry.altitude) && isFiniteNumber(entry.azimuth)) {
-          return { ...scheduled, altitude: entry.altitude, azimuth: entry.azimuth };
+        const { altitude, azimuth } = entry;
+        if (
+          scheduled &&
+          isFiniteNumber(altitude) &&
+          isFiniteNumber(azimuth) &&
+          azimuth >= 0 &&
+          azimuth < 360
+        ) {
+          return { ...scheduled, altitude, azimuth };
         }
       }
       throw new Error("Wallpaper manifest has an invalid solar entry");

@@ -7,9 +7,8 @@ export interface ClockText {
 }
 
 export function greetingFor(hour: number): string {
-  if (hour < 5) return "Good night";
-  if (hour < 12) return "Good morning";
-  if (hour < 18) return "Good afternoon";
+  if (hour >= 5 && hour < 12) return "Good morning";
+  if (hour >= 12 && hour < 18) return "Good afternoon";
   return "Good evening";
 }
 
@@ -29,14 +28,16 @@ export function clockText(date: Date, locale?: string): ClockText {
 }
 
 export function mountClock(root: HTMLElement): void {
-  const time = h("time", { className: "clock__time" });
-  const date = h("p", { className: "clock__date" });
+  // The greeting is English, but the date and time follow the browser's language.
+  const locale = new Intl.DateTimeFormat().resolvedOptions().locale;
+  const time = h("time", { className: "clock__time", attributes: { lang: locale } });
+  const date = h("p", { className: "clock__date", attributes: { lang: locale } });
   const greeting = h("h1", { className: "clock__greeting" });
   root.replaceChildren(time, h("div", { className: "clock__details" }, [date, greeting]));
 
   const update = () => {
     const now = new Date();
-    const text = clockText(now);
+    const text = clockText(now, locale);
     time.textContent = text.time;
     time.dateTime = now.toISOString();
     date.textContent = text.date;

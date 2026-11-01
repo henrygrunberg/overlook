@@ -173,6 +173,8 @@ export function moveFavourite(
 }
 
 const URL_SCHEME = /^[a-z][a-z0-9+.-]*:\/\//i;
+// The URL parser would read "192.168" as the address 192.0.0.168.
+const PARTIAL_IPV4 = /^\d+(\.\d+){0,2}\.?$/;
 const BARE_IPV6 = /^[\da-f*]*:[\da-f*]*:[\da-f:.*]*$/i;
 // Chromium's URL parser percent-encodes `*` in host names, so it is swapped out while parsing.
 const WILDCARD_STAND_IN = "overlook-wildcard";
@@ -181,10 +183,13 @@ const WILDCARD_STAND_IN = "overlook-wildcard";
 // names, brackets around IPv6, no user, port or path.
 function hostPattern(text: string): string {
   const withoutScheme = text.replace(URL_SCHEME, "");
-  const authority = BARE_IPV6.test(withoutScheme) ? `[${withoutScheme}]` : withoutScheme;
+  if (PARTIAL_IPV4.test(withoutScheme)) return `${withoutScheme.replace(/\.$/, "")}.*`;
+  const authority = BARE_IPV6.test(withoutScheme)
+    ? `[${withoutScheme}]`
+    : withoutScheme.replace(/^\./, "*.");
   try {
     const { hostname } = new URL(`http://${authority.replaceAll("*", WILDCARD_STAND_IN)}`);
-    return hostname.replaceAll(WILDCARD_STAND_IN, "*");
+    return hostname.replaceAll(WILDCARD_STAND_IN, "*").replace(/\.$/, "");
   } catch {
     // The parser rejects the stand-in inside IPv6 brackets, so wildcard IPv6 is trimmed by hand.
     return authority

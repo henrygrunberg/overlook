@@ -5,7 +5,7 @@ import {
   getRecord,
   putRecord,
 } from "../storage/database";
-import { isFiniteNumber, isRecord } from "../validation";
+import { isFiniteNumber, isRecord, parseHttpUrl } from "../validation";
 
 interface IconCheck {
   readonly origin: string;
@@ -29,17 +29,20 @@ const REFRESH_AFTER_MS = 30 * DAY_MS;
 const MAX_BACKOFF_MS = 30 * DAY_MS;
 
 export function iconOrigin(pageUrl: string): string | null {
-  try {
-    const url = new URL(pageUrl);
-    return url.protocol === "https:" || url.protocol === "http:" ? url.origin : null;
-  } catch {
-    return null;
+  return parseHttpUrl(pageUrl)?.origin ?? null;
+}
+
+export function iconOrigins(pageUrls: Iterable<string>): Set<string> {
+  const origins = new Set<string>();
+  for (const url of pageUrls) {
+    const origin = iconOrigin(url);
+    if (origin) origins.add(origin);
   }
+  return origins;
 }
 
 function retryAfter(record: IconRecord): number {
-  // Development builds wrote "missing" records before failed checks were counted.
-  const failedAttempts = record.failedAttempts ?? (record.status === "missing" ? 1 : 0);
+  const failedAttempts = record.failedAttempts ?? 0;
   return failedAttempts > 0
     ? Math.min(2 ** (failedAttempts - 1) * DAY_MS, MAX_BACKOFF_MS)
     : REFRESH_AFTER_MS;

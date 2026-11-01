@@ -1,4 +1,4 @@
-import { isRecord } from "../validation";
+import { isRecord, parseHttpUrl } from "../validation";
 
 export interface IconCandidate {
   readonly url: string;
@@ -11,31 +11,108 @@ export interface PageIcons {
   readonly manifestUrl: string | null;
 }
 
-const LINK_TAG = /<link\b[^>]*>/gi;
 const ATTRIBUTE = /([^\s=/>]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+)))?/g;
+const TAG_NAME = /<(\/?)([a-z][^\s/>]*)/iy;
+// Their content is text to the HTML parser, however much it looks like markup.
+const RAW_TEXT_END = new Map(
+  ["script", "style", "title", "textarea", "noscript", "template"].map((name) => [
+    name,
+    new RegExp(`</${name}[\\s/>]`, "gi"),
+  ]),
+);
 const APPLE_TOUCH_ICON_SIZE = 180;
 // Service workers can't rasterise SVG, so vector icons are skipped in favour of bitmaps.
 const SVG = /\.svgz?(?:[?#]|$)/i;
 
-const ENTITIES: Record<string, string> = { amp: "&", quot: '"', apos: "'", lt: "<", gt: ">" };
+const ENTITIES = new Map([
+  ["amp", "&"],
+  ["quot", '"'],
+  ["apos", "'"],
+  ["lt", "<"],
+  ["gt", ">"],
+]);
 
 const MAX_CODE_POINT = 0x10ffff;
 
 function decodeEntities(value: string): string {
   return value.replace(/&(#x[\da-f]+|#\d+|\w+);/gi, (entity: string, code: string) => {
-    if (!code.startsWith("#")) return ENTITIES[code.toLowerCase()] ?? entity;
+    if (!code.startsWith("#")) return ENTITIES.get(code.toLowerCase()) ?? entity;
     const codePoint = /^#x/i.test(code) ? parseInt(code.slice(2), 16) : Number(code.slice(1));
     // Out-of-range references would make fromCodePoint throw; leave them as written.
     return codePoint <= MAX_CODE_POINT ? String.fromCodePoint(codePoint) : entity;
   });
 }
 
-function parseAttributes(tag: string): Map<string, string> {
+function parseAttributes(source: string): Map<string, string> {
   const attributes = new Map<string, string>();
-  for (const [, name, double, single, bare] of tag.slice(5).matchAll(ATTRIBUTE)) {
+  for (const [, name, double, single, bare] of source.matchAll(ATTRIBUTE)) {
     if (name) attributes.set(name.toLowerCase(), decodeEntities(double ?? single ?? bare ?? ""));
   }
   return attributes;
+}
+
+interface Tag {
+  readonly name: string;
+  readonly isEnd: boolean;
+  readonly attributes: string;
+}
+
+const QUOTED_VALUE = /=\s*(?:"[^"]*"|'[^']*')/y;
+
+// The ">" that closes a tag, skipping any inside quoted values; -1 if the tag never closes.
+function tagEnd(html: string, from: number): number {
+  let at = from;
+  while (at < html.length && html[at] !== ">") {
+    QUOTED_VALUE.lastIndex = at;
+    at = QUOTED_VALUE.test(html) ? QUOTED_VALUE.lastIndex : at + 1;
+  }
+  return at < html.length ? at : -1;
+}
+
+// A bounded stand-in for the HTML tokenizer: comments and raw text yield no tags, and an
+// unclosed tag or comment ends the scan, as it would end the document.
+function* tags(html: string): Generator<Tag> {
+  let at = 0;
+  while ((at = html.indexOf("<", at)) !== -1) {
+    if (html.startsWith("<!--", at)) {
+      const close = html.indexOf("-->", at + 2);
+      if (close === -1) return;
+      at = close + 3;
+      continue;
+    }
+    TAG_NAME.lastIndex = at;
+    const match = TAG_NAME.exec(html);
+    if (!match) {
+      // "<!doctype …>" and "<?xml …>" run to the next ">"; any other "<" is text.
+      at = "!?/".includes(html[at + 1] ?? " ") ? html.indexOf(">", at) : at + 1;
+      if (at === -1) return;
+      continue;
+    }
+    const end = tagEnd(html, TAG_NAME.lastIndex);
+    if (end === -1) return;
+    const [, slash, name = ""] = match;
+    const tag = {
+      name: name.toLowerCase(),
+      isEnd: slash === "/",
+      attributes: html.slice(TAG_NAME.lastIndex, end),
+    };
+    yield tag;
+    at = end + 1;
+    const rawTextEnd = tag.isEnd ? undefined : RAW_TEXT_END.get(tag.name);
+    if (rawTextEnd) {
+      rawTextEnd.lastIndex = at;
+      const close = rawTextEnd.exec(html);
+      if (!close) return;
+      at = close.index;
+    }
+  }
+}
+
+const isHeadEnd = (tag: Tag) => tag.isEnd && tag.name === "head";
+
+export function hasHeadEnded(html: string): boolean {
+  for (const tag of tags(html)) if (isHeadEnd(tag)) return true;
+  return false;
 }
 
 /** "16x16 32x32" → 32, "any" → 512 (scalable), missing → 0. */
@@ -52,29 +129,26 @@ export function largestDeclaredSize(sizes: string | undefined): number {
   return largest;
 }
 
-function resolveHttpUrl(href: string, base: string): string | null {
-  try {
-    const url = new URL(href, base);
-    return url.protocol === "https:" || url.protocol === "http:" ? url.href : null;
-  } catch {
-    return null;
-  }
-}
+const resolveHttpUrl = (href: string, base: string) => parseHttpUrl(href, base)?.href ?? null;
 
 export function findPageIcons(html: string, pageUrl: string): PageIcons {
-  const headEnd = html.search(/<\/head\s*>/i);
-  const head = headEnd === -1 ? html : html.slice(0, headEnd);
+  const links: Map<string, string>[] = [];
+  let baseHref: string | undefined;
+  for (const tag of tags(html)) {
+    if (isHeadEnd(tag)) break;
+    if (tag.isEnd) continue;
+    if (tag.name === "link") links.push(parseAttributes(tag.attributes));
+    if (tag.name === "base") baseHref ??= parseAttributes(tag.attributes).get("href");
+  }
+  const base = (baseHref === undefined ? null : resolveHttpUrl(baseHref, pageUrl)) ?? pageUrl;
+
   const icons: IconCandidate[] = [];
   let manifestUrl: string | null = null;
-
-  // An unclosed <link would make every later <link scan to the end of the head.
-  const scanned = head.slice(0, head.lastIndexOf(">") + 1);
-  for (const [tag] of scanned.matchAll(LINK_TAG)) {
-    const attributes = parseAttributes(tag);
+  for (const attributes of links) {
     const rel = (attributes.get("rel") ?? "").toLowerCase().split(/\s+/);
     const href = attributes.get("href");
     if (!href) continue;
-    const url = resolveHttpUrl(href, pageUrl);
+    const url = resolveHttpUrl(href, base);
     if (!url) continue;
 
     if (rel.includes("manifest")) {
@@ -92,6 +166,15 @@ export function findPageIcons(html: string, pageUrl: string): PageIcons {
   return { icons, manifestUrl };
 }
 
+const GENERAL_PURPOSES = new Set(["any", "maskable"]);
+
+// A monochrome-only icon is a silhouette meant to be tinted, which would show as a blot.
+function hasGeneralPurpose(purpose: unknown): boolean {
+  if (typeof purpose !== "string") return true;
+  const purposes = purpose.toLowerCase().split(/\s+/).filter(Boolean);
+  return purposes.length === 0 || purposes.some((name) => GENERAL_PURPOSES.has(name));
+}
+
 export function findManifestIcons(manifest: unknown, manifestUrl: string): IconCandidate[] {
   if (!isRecord(manifest)) return [];
   const { icons } = manifest;
@@ -101,7 +184,7 @@ export function findManifestIcons(manifest: unknown, manifestUrl: string): IconC
     if (!isRecord(icon)) return [];
     const { src, sizes, type, purpose } = icon;
     if (typeof src !== "string" || type === "image/svg+xml" || SVG.test(src)) return [];
-    if (typeof purpose === "string" && purpose.split(/\s+/).includes("monochrome")) return [];
+    if (!hasGeneralPurpose(purpose)) return [];
     const url = resolveHttpUrl(src, manifestUrl);
     return url ? [{ url, size: largestDeclaredSize(typeof sizes === "string" ? sizes : "") }] : [];
   });

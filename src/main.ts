@@ -27,20 +27,12 @@ async function main(): Promise<void> {
   await startApp(settings);
 }
 
-let started = false;
-function start(): void {
-  if (started) return;
-  started = true;
-  main().catch(showStartupError);
-}
-
-window.addEventListener("pageshow", (event) => {
-  if (event.persisted) start();
-});
 if (document.documentElement.dataset.focusStep === "leaving") {
   window.addEventListener("load", () => {
-    window.setTimeout(start, STEP_FALLBACK_MS);
+    window.setTimeout(() => {
+      main().catch(showStartupError);
+    }, STEP_FALLBACK_MS);
   });
 } else {
-  start();
+  main().catch(showStartupError);
 }

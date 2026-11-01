@@ -8,7 +8,7 @@ import {
 } from "./bookmarks/library";
 import { IconLibrary } from "./favicons/icon-library";
 import { homeView } from "./home/home-view";
-import { iconOrigin } from "./favicons/icon-store";
+import { iconOrigins } from "./favicons/icon-store";
 import { compileLabels, type LabelsOf } from "./labels/labels";
 import { warn, warnOnFailure } from "./log";
 import { SearchIndex } from "./search/search-index";
@@ -28,9 +28,10 @@ import { openUrl, searchWeb, type Disposition } from "./ui/navigation";
 import { renderPanel, revealFolder, type PanelAction, type PanelView } from "./ui/panel";
 import { bindPanelEvents } from "./ui/panel-events";
 import { SettingsDialog } from "./ui/settings-dialog";
+import { watchDynamicWallpaper } from "./wallpaper/dynamic-wallpaper";
 import { bindShortcuts } from "./ui/shortcuts";
 import { renderSidebar } from "./ui/sidebar";
-import { Spotlight } from "./ui/spotlight";
+import { Spotlight, type SpotlightResults } from "./ui/spotlight";
 import { UsageStore } from "./usage/usage-store";
 
 const SCOPED_LIMIT = 200;
@@ -44,15 +45,6 @@ function requireElement(id: string): HTMLElement {
 
 function withSubfolders(folder: Folder): Folder[] {
   return [folder, ...folder.subfolders.flatMap(withSubfolders)];
-}
-
-async function loadUsage(): Promise<UsageStore> {
-  try {
-    return await UsageStore.load(chrome.storage.local);
-  } catch (error: unknown) {
-    warn("read usage history; Frequent starts empty", error);
-    return UsageStore.inMemory();
-  }
 }
 
 // Called before the bookmarks are read, so a change made while the page starts isn't missed.
@@ -97,31 +89,40 @@ function searchIndex(library: Library, labelsOf: LabelsOf): SearchIndex {
   return new SearchIndex(library, (bookmark) => labelsOf(bookmark).map((label) => label.text));
 }
 
-const labelsKey = (settings: Settings) => JSON.stringify(settings.labels);
+const differ = (a: unknown, b: unknown) => JSON.stringify(a) !== JSON.stringify(b);
 
 export async function startApp(settings: SettingsStore): Promise<void> {
   const background = new BackgroundView(requireElement("wallpaper"));
   let shownBackground = settings.current.background;
+  // Before the first look at the flag, so the worker finding a wallpaper meanwhile isn't missed.
+  watchDynamicWallpaper(() => {
+    if (shownBackground.kind === "auto" || shownBackground.kind === "dynamic") {
+      void background.apply(shownBackground);
+    }
+  });
   void background.apply(shownBackground);
   mountClock(requireElement("clock"));
 
   const sidebarRoot = requireElement("sidebar");
   const panelRoot = requireElement("panel");
+  const announcer = requireElement("announcer");
   const onBookmarksChanged = watchBookmarks();
   const [usage, icons, tree] = await Promise.all([
-    loadUsage(),
+    UsageStore.load(chrome.storage.local),
     IconLibrary.load(),
     chrome.bookmarks.getTree(),
   ]);
 
   let state = libraryState(tree);
   let labelsOf: LabelsOf = compileLabels(settings.current.labels);
-  let indexedLabels = labelsKey(settings.current);
   // Only search needs it, so it's built on first use and dropped when bookmarks or labels change.
   let index: SearchIndex | undefined;
   const currentIndex = () => (index ??= searchIndex(state.library, labelsOf));
   let selectedFolderId: string | null = null;
+  // An empty subfolder opened from search has no section in its top folder to show it by.
+  let emptySubfolderId: string | null = null;
   let editingFavourites = false;
+  let homeShowsFrequent = false;
   let pinnedIds: ReadonlySet<string> = new Set();
   let canPin = false;
 
@@ -130,6 +131,7 @@ export async function startApp(settings: SettingsStore): Promise<void> {
       .map((id) => state.bookmarkById.get(id))
       .filter((bookmark) => bookmark !== undefined);
   const shownFavourites = () => favouriteBookmarks().map((bookmark) => bookmark.id);
+  const existingOnly = (ids: readonly string[]) => ids.filter((id) => state.bookmarkById.has(id));
   const decorate = (bookmark: Bookmark): BookmarkDecor => ({
     color: state.colorOf(bookmark),
     labels: labelsOf(bookmark),
@@ -154,25 +156,61 @@ export async function startApp(settings: SettingsStore): Promise<void> {
     canPin = favourites.length < MAX_FAVOURITES;
     const selected = state.library.topFolders.find((folder) => folder.id === selectedFolderId);
     selectedFolderId = selected?.id ?? null;
+    const emptySubfolder =
+      emptySubfolderId === null ? undefined : state.library.folderById.get(emptySubfolderId);
     renderSidebar(sidebarRoot, {
       folders: state.library.topFolders,
       selectedFolderId,
       colorOf: state.colorOf,
       onSelect: (folderId) => {
         selectedFolderId = folderId;
+        emptySubfolderId = null;
         render();
       },
     });
-    const view = panelView(selected, favourites);
-    if (view.kind === "home") editingFavourites = view.editing;
+    const shown = emptySubfolder?.topFolderId === selected?.id ? emptySubfolder : selected;
+    const view = panelView(shown, favourites);
+    editingFavourites = view.kind === "home" && view.editing;
+    homeShowsFrequent =
+      view.kind === "home" && view.sections.some((section) => section.id === "frequent");
     renderPanel(panelRoot, view, { colorOf: state.colorOf, decorate });
   };
 
-  const saveFavourites = (favourites: readonly string[]) => {
-    settings.update({ favourites }).catch(warnOnFailure("save your favourites"));
+  // Worked out from the stored favourites when saved, so pins made meanwhile in other tabs stay.
+  const changeFavourites = async (
+    change: (favourites: readonly string[]) => readonly string[],
+  ): Promise<boolean> => {
+    try {
+      await settings.update((stored) => ({ favourites: change(existingOnly(stored.favourites)) }));
+      return true;
+    } catch (error: unknown) {
+      warn("save your favourites", error);
+      announcer.textContent = "Couldn't save your favourites.";
+      return false;
+    }
   };
-  const moveFavouriteTo = (id: string, toIndex: number) => {
-    saveFavourites(moveFavourite(shownFavourites(), id, toIndex));
+  /** `toIndex` gives -1 to leave the favourites as they are. */
+  const moveFavouriteTo = (id: string, toIndex: (favourites: readonly string[]) => number) => {
+    void changeFavourites((favourites) => {
+      const index = toIndex(favourites);
+      return index < 0 ? favourites : moveFavourite(favourites, id, index);
+    }).then((saved) => {
+      if (!saved) return;
+      const favourites = shownFavourites();
+      const title = state.bookmarkById.get(id)?.title ?? "";
+      announcer.textContent = `${title} moved to position ${favourites.indexOf(id) + 1} of ${favourites.length}.`;
+    });
+  };
+
+  // The pin buttons are hidden once Home is full, but another tab may have filled it meanwhile.
+  const togglePin = (id: string) => {
+    let full = false;
+    void changeFavourites((favourites) => {
+      full = !favourites.includes(id) && favourites.length >= MAX_FAVOURITES;
+      return toggleFavourite(favourites, id);
+    }).then((saved) => {
+      if (saved && full) announcer.textContent = "Favourites are full.";
+    });
   };
 
   const open = (url: string, disposition: Disposition) => {
@@ -185,19 +223,28 @@ export async function startApp(settings: SettingsStore): Promise<void> {
 
   const openFolder = (folder: Folder) => {
     selectedFolderId = folder.topFolderId;
+    emptySubfolderId =
+      folder.totalBookmarks === 0 && folder.id !== folder.topFolderId ? folder.id : null;
     render();
     revealFolder(panelRoot, folder);
   };
 
+  const findFolder = (id: string) => state.library.folderById.get(id);
+  const search = (query: string, scopeFolderId: string | undefined): SpotlightResults => {
+    const listing = scopeFolderId !== undefined && query === "";
+    const results = currentIndex().search(query, {
+      scopeFolderId,
+      bookmarkBoost: (bookmark) => usage.boost(bookmark.url),
+      ...(listing ? { folderLimit: SCOPED_LIMIT, bookmarkLimit: SCOPED_LIMIT } : {}),
+    });
+    const total = listing ? findFolder(scopeFolderId)?.totalBookmarks : undefined;
+    return total !== undefined && total > results.bookmarks.length
+      ? { ...results, total }
+      : results;
+  };
+
   const spotlight = new Spotlight({
-    search: (query, scopeFolderId) =>
-      currentIndex().search(query, {
-        scopeFolderId,
-        bookmarkBoost: (bookmark) => usage.boost(bookmark.url),
-        ...(scopeFolderId !== undefined && query === ""
-          ? { folderLimit: SCOPED_LIMIT, bookmarkLimit: SCOPED_LIMIT }
-          : {}),
-      }),
+    search,
     colorOf: (folder) => state.colorOf(folder),
     decorate,
     onOpenFolder: openFolder,
@@ -211,24 +258,23 @@ export async function startApp(settings: SettingsStore): Promise<void> {
   requireElement("spotlight-slot").append(spotlight.element);
 
   const bookmarkUrls = () => state.library.bookmarks.map((bookmark) => bookmark.url);
-  const siteOrigins = () =>
-    new Set(
-      bookmarkUrls()
-        .map(iconOrigin)
-        .filter((origin) => origin !== null),
-    );
   const settingsDialog = new SettingsDialog(settings, {
     folders: () => state.library.topFolders.flatMap(withSubfolders),
-    cachedSites: () => [...siteOrigins()].filter((origin) => icons.hasCachedIcon(origin)).length,
-    totalSites: () => siteOrigins().size,
+    siteCounts: () => {
+      const origins = [...iconOrigins(bookmarkUrls())];
+      return {
+        cached: origins.filter((origin) => icons.hasCachedIcon(origin)).length,
+        total: origins.length,
+      };
+    },
     redownload: () => {
       icons.request(bookmarkUrls(), true);
     },
   });
 
-  const findFolder = (id: string) => state.library.folderById.get(id);
   icons.watch((origin) => {
     refreshIconTiles(document, origin, icons, (id) => state.bookmarkById.get(id));
+    settingsDialog.refreshIcons();
   });
   icons.request(bookmarkUrls());
 
@@ -237,23 +283,41 @@ export async function startApp(settings: SettingsStore): Promise<void> {
     shownBackground = current.background;
     void background.apply(shownBackground);
   };
+  let rendered = settings.current;
   settings.subscribe((current) => {
+    const previous = rendered;
+    rendered = current;
     // Storage events parse into new arrays every time, so compare the labels by value.
-    const labelsChanged = labelsKey(current) !== indexedLabels;
+    const labelsChanged = differ(previous.labels, current.labels);
     if (labelsChanged) {
-      indexedLabels = labelsKey(current);
       labelsOf = compileLabels(current.labels);
       index = undefined;
     }
-    render();
+    if (
+      labelsChanged ||
+      differ(previous.favourites, current.favourites) ||
+      differ(previous.home, current.home)
+    ) {
+      render();
+    }
     if (labelsChanged) spotlight.refresh(findFolder);
     showBackground(current);
   });
   // Another tab may have changed the background while the bookmarks loaded, before this subscribed.
   showBackground(settings.current);
+  // Applied only as the page comes into view: re-sorting the cards under the pointer would make
+  // the next click open a different bookmark.
+  let otherTabsVisited = false;
+  usage.subscribe(() => {
+    otherTabsVisited = true;
+  });
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState !== "visible" || !otherTabsVisited) return;
+    otherTabsVisited = false;
+    if (homeShowsFrequent) render();
+  });
 
   const runPanelAction = (action: PanelAction, id: string | undefined) => {
-    const position = id === undefined ? -1 : shownFavourites().indexOf(id);
     switch (action) {
       case "toggle-editing":
         editingFavourites = !editingFavourites;
@@ -261,13 +325,13 @@ export async function startApp(settings: SettingsStore): Promise<void> {
         break;
       case "toggle-pin":
       case "unpin":
-        if (id !== undefined) saveFavourites(toggleFavourite(shownFavourites(), id));
+        if (id !== undefined) togglePin(id);
         break;
       case "move-earlier":
-        if (id !== undefined && position > 0) moveFavouriteTo(id, position - 1);
+        if (id !== undefined) moveFavouriteTo(id, (favourites) => favourites.indexOf(id) - 1);
         break;
       case "move-later":
-        if (id !== undefined && position >= 0) moveFavouriteTo(id, position + 1);
+        if (id !== undefined) moveFavouriteTo(id, (favourites) => favourites.indexOf(id) + 1);
         break;
     }
   };
@@ -275,8 +339,7 @@ export async function startApp(settings: SettingsStore): Promise<void> {
     open,
     runAction: runPanelAction,
     moveFavourite: (id, ontoId) => {
-      const toIndex = shownFavourites().indexOf(ontoId);
-      if (toIndex >= 0) moveFavouriteTo(id, toIndex);
+      moveFavouriteTo(id, (favourites) => favourites.indexOf(ontoId));
     },
   });
   bindShortcuts(document, {
@@ -299,6 +362,7 @@ export async function startApp(settings: SettingsStore): Promise<void> {
           index = undefined;
           render();
           spotlight.refresh(findFolder);
+          settingsDialog.refresh();
         })
         .catch(warnOnFailure("reload bookmarks"));
     }, REBUILD_DELAY_MS);

@@ -1,9 +1,10 @@
-import { warn } from "../log";
+import { warn, warnOnFailure } from "../log";
+import { isPrivateOrigin } from "../private-network";
 import { fetchBestIcon, type IconLookup } from "./fetch-icon";
 import {
   deleteIcons,
   ICON_CHANNEL,
-  iconOrigin,
+  iconOrigins,
   needsRefresh,
   readAllIcons,
   readIcon,
@@ -11,6 +12,7 @@ import {
   writeIcon,
   type IconRecord,
 } from "./icon-store";
+import { allowBookmarkedPrivateSites, blockPrivateSites } from "./private-origin-rules";
 
 const CONCURRENCY = 4;
 
@@ -23,6 +25,8 @@ export interface IconSyncDeps {
   readonly remove: (origins: readonly string[]) => Promise<void>;
   readonly announce: (origin: string) => void;
   readonly now: () => number;
+  readonly allowPrivateSites: () => Promise<void>;
+  readonly blockPrivateSites: () => Promise<void>;
 }
 
 const defaultDeps = (): IconSyncDeps => {
@@ -38,42 +42,40 @@ const defaultDeps = (): IconSyncDeps => {
       channel.postMessage({ origin });
     },
     now: Date.now,
+    allowPrivateSites: allowBookmarkedPrivateSites,
+    blockPrivateSites,
   };
 };
 
-function originsOf(pageUrls: Iterable<string>): Set<string> {
-  const origins = new Set<string>();
-  for (const url of pageUrls) {
-    const origin = iconOrigin(url);
-    if (origin) origins.add(origin);
-  }
-  return origins;
-}
-
+// The rules that let the extension reach bookmarked private sites can't tell which site a
+// redirect came from, so private and public sites are fetched in separate passes.
 export class IconSync {
   private readonly pending = new Set<string>();
-  private readonly queue: string[] = [];
-  private active = 0;
+  private readonly privateQueue: string[] = [];
+  private readonly publicQueue: string[] = [];
+  private draining = false;
   private idle: Promise<void> = Promise.resolve();
-  private resolveIdle: (() => void) | undefined;
 
   constructor(private readonly deps: IconSyncDeps = defaultDeps()) {}
 
   async ensure(pageUrls: Iterable<string>, force = false): Promise<void> {
-    const requested = [...originsOf(pageUrls)].filter((origin) => !this.pending.has(origin));
+    const requested = [...iconOrigins(pageUrls)].filter((origin) => !this.pending.has(origin));
     const due = force || requested.length === 0 ? requested : await this.dueOrigins(requested);
     if (due === null) return;
     for (const origin of due) {
       if (this.pending.has(origin)) continue;
       this.pending.add(origin);
-      this.queue.push(origin);
+      (isPrivateOrigin(origin) ? this.privateQueue : this.publicQueue).push(origin);
     }
-    this.pump();
+    if (!this.draining) {
+      this.draining = true;
+      this.idle = this.drain();
+    }
     await this.idle;
   }
 
   async pruneExcept(pageUrls: Iterable<string>): Promise<void> {
-    const kept = originsOf(pageUrls);
+    const kept = iconOrigins(pageUrls);
     const stale = (await this.deps.readOrigins()).filter(
       (origin) => !kept.has(origin) && !this.pending.has(origin),
     );
@@ -95,24 +97,55 @@ export class IconSync {
     return origins.filter((origin) => needsRefresh(cached.get(origin), now));
   }
 
-  private pump(): void {
-    if (this.queue.length > 0 && this.active === 0 && !this.resolveIdle) {
-      this.idle = new Promise((resolve) => (this.resolveIdle = resolve));
+  private async drain(): Promise<void> {
+    try {
+      while (this.privateQueue.length > 0 || this.publicQueue.length > 0) {
+        if (this.privateQueue.length > 0) await this.runPrivatePass();
+        else await this.runPublicPass();
+      }
+    } finally {
+      this.draining = false;
     }
-    while (this.active < CONCURRENCY && this.queue.length > 0) {
-      const origin = this.queue.shift();
-      if (origin === undefined) break;
-      this.active++;
-      void this.sync(origin).finally(() => {
-        this.active--;
+  }
+
+  private async runPrivatePass(): Promise<void> {
+    // Sites queued meanwhile wait for the next pass, which allows the bookmarks of that moment.
+    const batch = this.privateQueue.splice(0);
+    try {
+      await this.deps.allowPrivateSites();
+    } catch (error: unknown) {
+      warn("allow the bookmarked private sites", error);
+      this.drop(batch);
+      return;
+    }
+    await this.runAll(batch);
+    await this.deps.blockPrivateSites().catch(warnOnFailure("block the private sites again"));
+  }
+
+  private async runPublicPass(): Promise<void> {
+    try {
+      // Also clears what a pass cut short by a stopped worker left allowed.
+      await this.deps.blockPrivateSites();
+    } catch (error: unknown) {
+      warn("block the private sites", error);
+      this.drop(this.publicQueue.splice(0));
+      return;
+    }
+    await this.runAll(this.publicQueue);
+  }
+
+  private async runAll(queue: string[]): Promise<void> {
+    const worker = async () => {
+      for (let origin = queue.shift(); origin !== undefined; origin = queue.shift()) {
+        await this.sync(origin);
         this.pending.delete(origin);
-        this.pump();
-      });
-    }
-    if (this.active === 0 && this.queue.length === 0 && this.resolveIdle) {
-      this.resolveIdle();
-      this.resolveIdle = undefined;
-    }
+      }
+    };
+    await Promise.all(Array.from({ length: CONCURRENCY }, worker));
+  }
+
+  private drop(origins: readonly string[]): void {
+    for (const origin of origins) this.pending.delete(origin);
   }
 
   private async sync(origin: string): Promise<void> {

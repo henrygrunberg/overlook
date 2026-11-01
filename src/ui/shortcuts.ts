@@ -1,4 +1,5 @@
 import { shortcutModifier } from "./navigation";
+import { focusPanelTitle } from "./panel";
 
 export interface ShortcutActions {
   readonly focusSearch: () => void;
@@ -19,6 +20,12 @@ function isKeyK(event: KeyboardEvent): boolean {
 }
 
 export function bindShortcuts(page: Document, actions: ShortcutActions): void {
+  // Following the link's #panel would put that in the address bar and in the tab's history.
+  page.addEventListener("click", (event) => {
+    if (!(event.target instanceof Element) || !event.target.closest(".skip-link")) return;
+    event.preventDefault();
+    focusPanelTitle(page);
+  });
   const isMac = shortcutModifier() === "⌘";
   page.addEventListener("keydown", (event) => {
     if (event.defaultPrevented || event.isComposing) return;

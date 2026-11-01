@@ -27,6 +27,8 @@ export interface Folder {
   readonly bookmarks: readonly Bookmark[];
   readonly subfolders: readonly Folder[];
   readonly totalBookmarks: number;
+  /** A permanent root's own bookmarks, shown as a folder named after the root. */
+  readonly holdsLooseBookmarks: boolean;
 }
 
 export interface Library {
@@ -42,6 +44,7 @@ export interface BookmarkNode {
   readonly title: string;
   readonly url?: string | undefined;
   readonly dateAdded?: number | undefined;
+  readonly syncing?: boolean | undefined;
   readonly children?: readonly BookmarkNode[] | undefined;
 }
 
@@ -53,6 +56,9 @@ const OPENABLE_PROTOCOLS = new Set([
   "chrome:",
   "brave:",
   "edge:",
+  "vivaldi:",
+  "opera:",
+  "chrome-extension:",
   "about:",
 ]);
 
@@ -67,8 +73,10 @@ export function parseBookmarkUrl(url: string): URL | null {
   }
 }
 
+const withoutTrailingDots = (hostname: string) => hostname.replace(/\.+$/, "");
+
 function displayHost(url: URL): string {
-  return url.hostname.replace(/^www\./, "") || url.protocol.replace(":", "");
+  return withoutTrailingDots(url.hostname).replace(/^www\./, "") || url.protocol.replace(":", "");
 }
 
 interface FolderContext {
@@ -78,7 +86,7 @@ interface FolderContext {
 }
 
 function folderTitle(node: BookmarkNode): string {
-  return node.title || "Untitled folder";
+  return node.title.trim() || "Untitled folder";
 }
 
 function buildFolder(
@@ -86,6 +94,7 @@ function buildFolder(
   title: string,
   parent: FolderContext,
   folders: Folder[],
+  holdsLooseBookmarks = false,
 ): Folder {
   const inside: FolderContext = {
     topFolderId: parent.topFolderId,
@@ -105,10 +114,10 @@ function buildFolder(
     const host = displayHost(url);
     bookmarks.push({
       id: child.id,
-      title: child.title.trim() || host,
+      title: child.title.trim() || (url.hostname ? host : url.href),
       url: url.href,
       host,
-      hostname: url.hostname.toLowerCase(),
+      hostname: withoutTrailingDots(url.hostname.toLowerCase()),
       dateAdded: child.dateAdded ?? 0,
       folderId: node.id,
       topFolderId: inside.topFolderId,
@@ -127,10 +136,52 @@ function buildFolder(
     bookmarks,
     subfolders,
     totalBookmarks:
-      bookmarks.length + subfolders.reduce((sum, folder) => sum + folder.totalBookmarks, 0),
+      bookmarks.length + subfolders.reduce((sum, subfolder) => sum + subfolder.totalBookmarks, 0),
+    holdsLooseBookmarks,
   };
   folders.push(folder);
   return folder;
+}
+
+interface TopFolderSource {
+  readonly node: BookmarkNode;
+  readonly root: BookmarkNode;
+  readonly title: string;
+  readonly holdsLooseBookmarks: boolean;
+}
+
+function topFolderSources(root: BookmarkNode): TopFolderSource[] {
+  const children = root.children ?? [];
+  const subfolders = children
+    .filter((child) => child.url === undefined)
+    .map((node) => ({ node, root, title: folderTitle(node), holdsLooseBookmarks: false }));
+  const looseBookmarks = children.filter(
+    (child) => child.url !== undefined && parseBookmarkUrl(child.url) !== null,
+  );
+  if (looseBookmarks.length === 0) return subfolders;
+  const looseFolder = { ...root, children: looseBookmarks };
+  return [
+    ...subfolders,
+    { node: looseFolder, root, title: root.title || "Bookmarks", holdsLooseBookmarks: true },
+  ];
+}
+
+// Two roots can hold folders of the same name, and with account storage on, a root can have a
+// copy that stays on this device under the same name.
+function withDistinctTitles(sources: readonly TopFolderSource[]): TopFolderSource[] {
+  const count = (keys: readonly string[]) => {
+    const counts = new Map<string, number>();
+    for (const key of keys) counts.set(key, (counts.get(key) ?? 0) + 1);
+    return counts;
+  };
+  const byTitle = count(sources.map(({ title }) => title));
+  const byTitleAndRoot = count(sources.map(({ title, root }) => `${title}\n${root.title}`));
+  const distinctTitle = ({ title, root }: TopFolderSource) => {
+    if ((byTitle.get(title) ?? 0) < 2) return title;
+    if ((byTitleAndRoot.get(`${title}\n${root.title}`) ?? 0) < 2) return `${title} (${root.title})`;
+    return root.syncing === false ? `${title} (this device)` : title;
+  };
+  return sources.map((source) => ({ ...source, title: distinctTitle(source) }));
 }
 
 /**
@@ -139,30 +190,30 @@ function buildFolder(
  */
 export function buildLibrary(tree: readonly BookmarkNode[]): Library {
   const folders: Folder[] = [];
-  const topFolders: Folder[] = [];
-  const permanentRoots = tree.flatMap((root) => root.children ?? []);
+  const sources = tree.flatMap((root) => root.children ?? []).flatMap(topFolderSources);
+  const topFolders = withDistinctTitles(sources).map(({ node, title, holdsLooseBookmarks }) =>
+    buildFolder(
+      node,
+      title,
+      { topFolderId: node.id, path: [], ancestorIds: [] },
+      folders,
+      holdsLooseBookmarks,
+    ),
+  );
 
-  for (const root of permanentRoots) {
-    const children = root.children ?? [];
-    for (const child of children) {
-      if (child.url !== undefined) continue;
-      const top = { topFolderId: child.id, path: [], ancestorIds: [] };
-      topFolders.push(buildFolder(child, folderTitle(child), top, folders));
-    }
-    const looseBookmarks = children.filter(
-      (child) => child.url !== undefined && parseBookmarkUrl(child.url) !== null,
+  // In tree order, so where a URL is bookmarked twice the copy nearer the top comes first.
+  const built = new Map(
+    folders.flatMap((folder) => folder.bookmarks).map((bookmark) => [bookmark.id, bookmark]),
+  );
+  const inTreeOrder = (nodes: readonly BookmarkNode[]): Bookmark[] =>
+    nodes.flatMap((node) =>
+      node.url === undefined ? inTreeOrder(node.children ?? []) : (built.get(node.id) ?? []),
     );
-    if (looseBookmarks.length > 0) {
-      const top = { topFolderId: root.id, path: [], ancestorIds: [] };
-      const looseFolder = { ...root, children: looseBookmarks };
-      topFolders.push(buildFolder(looseFolder, root.title || "Bookmarks", top, folders));
-    }
-  }
 
   return {
     topFolders,
     folders,
-    bookmarks: folders.flatMap((folder) => folder.bookmarks),
+    bookmarks: inTreeOrder(tree),
     folderById: new Map(folders.map((folder) => [folder.id, folder])),
   };
 }

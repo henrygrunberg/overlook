@@ -5,14 +5,14 @@ import type { FolderColors } from "./folder-colors";
 import { icon } from "./icons";
 import { linkCard, type BookmarkDecor, type CardDetail } from "./link-card";
 import { scrollBehavior } from "./motion";
-import { countOf } from "./text";
+import { countOf, folderPath } from "./text";
 
 const HIGHLIGHT_MS = 1600;
 
 export type PanelView =
   | {
       readonly kind: "home";
-      readonly sections: readonly HomeSection[];
+      readonly sections: readonly [HomeSection, ...HomeSection[]];
       readonly editing: boolean;
     }
   | { readonly kind: "folder"; readonly folder: Folder; readonly isHome: boolean };
@@ -34,7 +34,7 @@ export function folderSections(folder: Folder): Section[] {
     if (current.bookmarks.length > 0) {
       sections.push({
         id: current.id,
-        heading: current === folder ? null : current.path.slice(folder.path.length).join(" › "),
+        heading: current === folder ? null : folderPath(current.path.slice(folder.path.length)),
         bookmarks: current.bookmarks,
       });
     }
@@ -62,7 +62,11 @@ export function isPanelAction(value: string | undefined): value is PanelAction {
 function header(leading: Element, title: string, note: string, action?: Node): HTMLElement {
   return h("header", { className: "panel__header" }, [
     leading,
-    h("h2", { className: "panel__title", text: title, attributes: { tabindex: "-1" } }),
+    h("h2", {
+      className: "panel__title",
+      text: title,
+      attributes: { tabindex: "-1", dir: "auto" },
+    }),
     h("span", { className: "panel__note", text: note }),
     action,
   ]);
@@ -107,7 +111,6 @@ function renderHome(
   decor: PanelDecor,
 ): void {
   const [first, ...rest] = view.sections;
-  if (!first) return;
   const isFavourites = first.id === "favourites";
   const body = (section: HomeSection) => {
     if (section.bookmarks.length === 0) return emptyState(section.emptyText);
@@ -200,7 +203,7 @@ function renderFolder(
   root.replaceChildren(
     header(
       view.isHome ? icon("home") : folderIcon,
-      folder.title,
+      folder.id === folder.topFolderId ? folder.title : folderPath(folder.path),
       countOf(folder.totalBookmarks, "bookmark"),
     ),
     h(
@@ -213,7 +216,11 @@ function renderFolder(
               { className: "panel__section", attributes: { id: sectionElementId(section.id) } },
               [
                 section.heading !== null &&
-                  h("h3", { className: "panel__section-title", text: section.heading }),
+                  h("h3", {
+                    className: "panel__section-title",
+                    text: section.heading,
+                    attributes: { dir: "auto" },
+                  }),
                 grid(section.bookmarks, "host", decor),
               ],
             ),
@@ -234,6 +241,10 @@ function highlightSection(folder: Folder): HTMLElement | null {
     section.classList.remove("is-highlighted");
   }, HIGHLIGHT_MS);
   return section;
+}
+
+export function focusPanelTitle(page: Document): void {
+  page.querySelector<HTMLElement>(".panel__title")?.focus({ preventScroll: true });
 }
 
 /** Call after rendering the folder's top-level folder. */

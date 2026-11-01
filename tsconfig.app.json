@@ -5,6 +5,5 @@
     "lib": ["ES2024", "DOM", "DOM.Iterable"],
     "types": ["chrome", "vite/client"]
   },
-  "include": ["src"],
-  "exclude": ["src/service-worker.ts"]
+  "include": ["src", "tests/unit"]
 }

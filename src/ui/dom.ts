@@ -21,3 +21,13 @@ export function h<K extends keyof HTMLElementTagNameMap>(
   element.append(...children.filter((child): child is Node | string => Boolean(child)));
   return element;
 }
+
+/** Like replaceChildren, but leaves the children it keeps in place, so focus inside them stays. */
+export function reconcileChildren(parent: Element, children: readonly Element[]): void {
+  const wanted = new Set(children);
+  for (const child of [...parent.children]) if (!wanted.has(child)) child.remove();
+  children.forEach((child, index) => {
+    const current = parent.children[index];
+    if (current !== child) parent.insertBefore(child, current ?? null);
+  });
+}

@@ -24,10 +24,10 @@ test.describe("new tab page", () => {
     const sidebar = newTab.getByRole("navigation", { name: "Folders" });
     await expect(sidebar.getByRole("button")).toHaveText([
       "Home",
-      "Work4",
-      "Reading2",
-      "Outdoors2",
-      /^Bookmarks bar1$/i,
+      "Work4 bookmarks",
+      "Reading2 bookmarks",
+      "Outdoors2 bookmarks",
+      /^Bookmarks bar1 bookmark$/i,
     ]);
     await expect(sidebar.getByRole("button", { name: "Home" })).toHaveAttribute(
       "aria-current",
@@ -38,7 +38,7 @@ test.describe("new tab page", () => {
   test("starts on Home with an empty Favourites and the newest bookmarks", async ({ newTab }) => {
     const panel = newTab.getByRole("main");
     await expect(panel.getByRole("heading", { level: 2 })).toHaveText("Favourites");
-    await expect(panel.locator(".panel__empty")).toContainText("click ☆");
+    await expect(panel.locator(".panel__empty")).toContainText("Use the ☆");
     await expect(panel.getByRole("heading", { level: 3 })).toHaveText("Recently added");
     await expect(panel.locator(".link-card")).toHaveCount(8);
   });

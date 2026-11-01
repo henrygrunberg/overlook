@@ -27,7 +27,6 @@ interface Field {
 
 interface IndexedEntry<T> {
   readonly item: T;
-  readonly id: string;
   readonly ancestorIds: readonly string[];
   readonly title: string;
   readonly acronym: string;
@@ -40,6 +39,8 @@ const PATH_WEIGHT = 0.7;
 const LABEL_WEIGHT = 0.7;
 const MIN_TYPO_LENGTH = 4;
 const LONG_TOKEN_LENGTH = 8;
+// One of these characters is a whole word, unlike one Latin letter.
+const IDEOGRAPHIC = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u;
 
 function field(text: string, weight: number): Field {
   const normalized = normalize(text);
@@ -48,7 +49,6 @@ function field(text: string, weight: number): Field {
 
 function indexEntry<T>(
   item: T,
-  id: string,
   ancestorIds: readonly string[],
   title: string,
   fields: readonly Field[],
@@ -56,7 +56,6 @@ function indexEntry<T>(
   const titleField = field(title, TITLE_WEIGHT);
   return {
     item,
-    id,
     ancestorIds,
     title: titleField.text,
     acronym: acronym(titleField.words),
@@ -96,7 +95,12 @@ class TokenMatcher {
       if (best === 1) return 1;
     }
     if (best >= 0.8) return best;
-    if (this.token.length >= 2 && field.text.includes(this.token)) return Math.max(best, 0.65);
+    if (
+      (this.token.length >= 2 || IDEOGRAPHIC.test(this.token)) &&
+      field.text.includes(this.token)
+    ) {
+      return Math.max(best, 0.65);
+    }
     if (best > 0 || this.token.length < 3) return best;
     const spread = subsequenceScore(this.token, field.text);
     return spread >= 0.5 ? 0.3 * spread : 0;
@@ -155,12 +159,12 @@ export class SearchIndex {
 
   constructor(library: Library, labelsOf: (bookmark: Bookmark) => readonly string[] = () => []) {
     this.folders = library.folders.map((folder) =>
-      indexEntry(folder, folder.id, folder.ancestorIds, folder.title, [
+      indexEntry(folder, folder.ancestorIds, folder.title, [
         field(folder.path.slice(0, -1).join(" "), PATH_WEIGHT),
       ]),
     );
     this.bookmarks = library.bookmarks.map((bookmark) =>
-      indexEntry(bookmark, bookmark.id, bookmark.ancestorIds, bookmark.title, [
+      indexEntry(bookmark, bookmark.ancestorIds, bookmark.title, [
         field(bookmark.host, HOST_WEIGHT),
         field(bookmark.path.join(" "), PATH_WEIGHT),
         field(labelsOf(bookmark).join(" "), LABEL_WEIGHT),
@@ -170,7 +174,18 @@ export class SearchIndex {
 
   search(query: string, options: SearchOptions = {}): SearchResults {
     const normalizedQuery = normalize(query.trim());
-    const tokens = [...new Set(normalizedQuery.split(/\s+/).filter(Boolean))];
+    // Titles are split on punctuation too, but "c++" alone must not become just "c".
+    const tokens = [
+      ...new Set(
+        normalizedQuery
+          .split(/\s+/)
+          .filter(Boolean)
+          .flatMap((part) => {
+            const words = splitWords(part);
+            return words.length > 1 ? words : [part];
+          }),
+      ),
+    ];
     const scope = options.scopeFolderId;
     if (tokens.length === 0 && scope === undefined) return { folders: [], bookmarks: [] };
 

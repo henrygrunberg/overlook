@@ -6,6 +6,7 @@ import { h } from "./dom";
 import { faviconUrl, isDefaultFavicon } from "./browser-favicon";
 import { icon, type IconName } from "./icons";
 import type { PanelAction } from "./panel";
+import { folderPath } from "./text";
 
 export type CardDetail = "host" | "path";
 
@@ -17,13 +18,26 @@ export interface BookmarkDecor {
   readonly canPin: boolean;
 }
 
+const SHOWN_LABELS = 2;
+
+export const chipClass = (label: LabelRule) => `chip chip--${label.color}`;
+
+export function labelChip(label: LabelRule): HTMLElement {
+  return h("span", { className: chipClass(label), text: label.text });
+}
+
 export function labelChips(labels: readonly LabelRule[]): HTMLElement | null {
   if (labels.length === 0) return null;
-  return h(
-    "span",
-    { className: "chips" },
-    labels.map((label) => h("span", { className: `chip chip--${label.color}`, text: label.text })),
-  );
+  const hidden = labels.slice(SHOWN_LABELS);
+  const hiddenNames = hidden.map((label) => label.text).join(", ");
+  return h("span", { className: "chips" }, [
+    ...labels.slice(0, SHOWN_LABELS).map(labelChip),
+    hidden.length > 0 &&
+      h("span", { className: "chip label-chip--more", attributes: { title: hiddenNames } }, [
+        h("span", { text: `+${hidden.length}`, attributes: { "aria-hidden": "true" } }),
+        h("span", { className: "visually-hidden", text: hiddenNames }),
+      ]),
+  ]);
 }
 
 const graphemes = new Intl.Segmenter();
@@ -130,8 +144,13 @@ export function linkCard(
 ): HTMLElement {
   const subtitle = h("span", {
     className: "link-card__detail",
-    text: detail === "path" ? bookmark.path.join(" › ") : bookmark.host,
+    text: detail === "path" ? folderPath(bookmark.path) : bookmark.host,
+    attributes: { dir: "auto" },
   });
+  // Chrome's own UI never shows a password saved in a bookmark's address.
+  const shownUrl = new URL(bookmark.url);
+  shownUrl.username = "";
+  shownUrl.password = "";
   const link = h(
     "a",
     {
@@ -139,14 +158,18 @@ export function linkCard(
       attributes: {
         href: bookmark.url,
         "data-bookmark-url": bookmark.url,
-        title: `${bookmark.title}\n${bookmark.url}`,
+        title: `${bookmark.title}\n${shownUrl.href}`,
         ...(editing ? { tabindex: "-1", draggable: "false" } : {}),
       },
     },
     [
       faviconTile(bookmark, decor),
       h("span", { className: "link-card__text" }, [
-        h("span", { className: "link-card__title", text: bookmark.title }),
+        h("span", {
+          className: "link-card__title",
+          text: bookmark.title,
+          attributes: { dir: "auto" },
+        }),
         h("span", { className: "link-card__meta" }, [subtitle, labelChips(decor.labels)]),
       ]),
     ],

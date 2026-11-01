@@ -21,7 +21,7 @@
     "test:e2e": "npm run build && playwright test",
     "check": "npm run typecheck && npm run lint && npm run format:check && npm run test:coverage && npm run test:e2e",
     "preview": "npm run build && node tests/e2e/preview.ts",
-    "deps:update": "npx --yes npm-check-updates@23.1.1 --upgrade --peer && npm install && npx playwright install chromium && npm audit && npm run check"
+    "deps:update": "npx --yes npm-check-updates@23.1.1 --upgrade --peer --cooldown 7 --reject @types/node && npx --yes npm-check-updates@23.1.1 --upgrade --filter @types/node --target minor --cooldown 7 && npm install && npx playwright install chromium && npm audit --audit-level=moderate && npm run check"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
@@ -42,5 +42,8 @@
   },
   "allowScripts": {
     "fsevents": false
+  },
+  "overrides": {
+    "minimatch": "11.0.3"
   }
 }

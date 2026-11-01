@@ -13,6 +13,21 @@ test.describe("dynamic wallpaper", () => {
     });
   });
 
+  test("shows a wallpaper found only after the page opened", async ({
+    context,
+    newTabUrl,
+    serviceWorker,
+  }) => {
+    await serviceWorker.evaluate(() => chrome.storage.local.set({ wallpaperInstalled: false }));
+    const page = await context.newPage();
+    await page.goto(newTabUrl);
+    const wallpaper = page.locator("#wallpaper");
+    await expect(wallpaper).toHaveAttribute("data-background", "photo:autumn-forest");
+
+    await serviceWorker.evaluate(() => chrome.storage.local.set({ wallpaperInstalled: true }));
+    await expect(wallpaper).toHaveAttribute("data-frame", /\d/);
+  });
+
   test("moves on to the next frame as time passes", async ({ context, newTabUrl }) => {
     const page = await context.newPage();
     const wallpaper = page.locator("#wallpaper");

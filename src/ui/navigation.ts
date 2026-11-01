@@ -4,6 +4,9 @@ export function shortcutModifier(platform = navigator.platform): "⌘" | "Ctrl" 
   return /^(Mac|iPhone|iPad)/.test(platform) ? "⌘" : "Ctrl";
 }
 
+// The second click of a double-click would record and open the visit again.
+export const isRepeatClick = (event: MouseEvent) => event.detail > 1;
+
 export function dispositionFor(event: MouseEvent | KeyboardEvent): Disposition {
   const middleClick = event instanceof MouseEvent && event.button === 1;
   return event.metaKey || event.ctrlKey || middleClick ? "background-tab" : "current-tab";

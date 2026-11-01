@@ -74,12 +74,20 @@ function prepareExtension(setup: WallpaperSetup): string {
 interface BrowserOptions {
   readonly timezoneId: string | undefined;
   readonly locale: string | undefined;
+  readonly wideFont: boolean;
+}
+
+// Linux's default sans-serif fonts are wider than macOS's: this brings their layout breaks here.
+function useWideFont() {
+  const sheet = new CSSStyleSheet();
+  sheet.replaceSync('body { font-family: Verdana, "DejaVu Sans", sans-serif !important; }');
+  document.adoptedStyleSheets = [sheet];
 }
 
 async function launchBrowser(
   extensionPath: string,
   profileDir: string,
-  { timezoneId, locale }: BrowserOptions,
+  { timezoneId, locale, wideFont }: BrowserOptions,
 ): Promise<BrowserContext> {
   const context = await chromium.launchPersistentContext(profileDir, {
     channel: "chromium",
@@ -98,6 +106,7 @@ async function launchBrowser(
     (url) => /^https?:$/.test(url.protocol) && !FAKE_SITE_HOSTS.has(url.hostname),
     (route) => route.fulfill({ contentType: "text/html", body: "<title>Visited</title>" }),
   );
+  if (wideFont) await context.addInitScript(useWideFont);
   return context;
 }
 
@@ -129,12 +138,11 @@ interface Fixtures {
   wallpaper: WallpaperSetup;
   /** The step navigates the page as it opens, which would race most tests, so it starts off. */
   focusStep: boolean;
+  wideFont: boolean;
   focusStepSetup: undefined;
   extensionPath: string;
   profileDir: string;
   context: BrowserContext;
-  /** Reruns the start-up sync: chrome.runtime.reload() unloads a command-line extension for good. */
-  restartBrowser: () => Promise<BrowserContext>;
   serviceWorker: Worker;
   extensionId: string;
   newTabUrl: string;
@@ -145,6 +153,7 @@ interface Fixtures {
 export const test = base.extend<Fixtures>({
   wallpaper: ["fixture", { option: true }],
   focusStep: [false, { option: true }],
+  wideFont: [false, { option: true }],
 
   extensionPath: async ({ wallpaper }, use) => {
     const path = prepareExtension(wallpaper);
@@ -159,21 +168,14 @@ export const test = base.extend<Fixtures>({
     rmSync(directory, { recursive: true, force: true });
   },
 
-  context: async ({ extensionPath, profileDir, timezoneId, locale }, use) => {
-    const context = await launchBrowser(extensionPath, profileDir, { timezoneId, locale });
+  context: async ({ extensionPath, profileDir, timezoneId, locale, wideFont }, use) => {
+    const context = await launchBrowser(extensionPath, profileDir, {
+      timezoneId,
+      locale,
+      wideFont,
+    });
     await use(context);
     await context.close();
-  },
-
-  restartBrowser: async ({ context, extensionPath, profileDir, timezoneId, locale }, use) => {
-    let current = context;
-    await use(async () => {
-      await current.close();
-      current = await launchBrowser(extensionPath, profileDir, { timezoneId, locale });
-      await extensionServiceWorker(current);
-      return current;
-    });
-    await current.close();
   },
 
   serviceWorker: async ({ context }, use) => {

@@ -1,8 +1,10 @@
-import { isPrivateNetworkHost } from "../private-network";
+import { isPrivateNetworkHost, isPrivateOrigin } from "../private-network";
+import { parseHttpUrl } from "../validation";
 import {
   conventionalIcons,
   findManifestIcons,
   findPageIcons,
+  hasHeadEnded,
   rankIcons,
   type IconCandidate,
 } from "./discover";
@@ -86,18 +88,26 @@ const readHead: BodyReader<string> = async ({ body }) => {
   const decoder = new TextDecoder();
   let html = "";
   let total = 0;
-  for (;;) {
+  let headEndSeen = false;
+  let nextScanAt = 0;
+  while (total < PAGE_BYTE_LIMIT) {
     const { done, value } = await reader.read();
     if (done) return html + decoder.decode();
     const kept = value.subarray(0, PAGE_BYTE_LIMIT - total);
     total += kept.byteLength;
     const searchFrom = Math.max(0, html.length - HEAD_END_OVERLAP);
     html += decoder.decode(kept, { stream: true });
-    if (total >= PAGE_BYTE_LIMIT || HEAD_END.test(html.slice(searchFrom))) {
-      await reader.cancel();
-      return html;
+    headEndSeen ||= HEAD_END.test(html.slice(searchFrom));
+    // The full scan runs only once "</head" turns up, and after a decoy (one in a comment or
+    // script) not again until the page has doubled, so the scans add up to linear time.
+    if (headEndSeen && html.length >= nextScanAt) {
+      if (hasHeadEnded(html)) break;
+      headEndSeen = false;
+      nextScanAt = html.length * 2;
     }
   }
+  await reader.cancel();
+  return html;
 };
 
 const discardBody: BodyReader<never> = async ({ body }) => {
@@ -108,28 +118,22 @@ const discardBody: BodyReader<never> = async ({ body }) => {
 // Pages choose their own icon URLs and could aim them at the LAN. Other hosts must be public, and
 // for a public site also https: a router can't prove it owns a public name that resolves to it.
 export function isPermittedIconUrl(url: string, siteOrigin: string): boolean {
-  try {
-    const target = new URL(url);
-    if (target.protocol !== "https:" && target.protocol !== "http:") return false;
-    if (target.origin === siteOrigin) return true;
-    if (isPrivateNetworkHost(target.hostname)) return false;
-    return target.protocol === "https:" || isPrivateNetworkHost(new URL(siteOrigin).hostname);
-  } catch {
-    return false;
-  }
+  const target = parseHttpUrl(url);
+  if (!target) return false;
+  if (target.origin === siteOrigin) return true;
+  if (isPrivateNetworkHost(target.hostname)) return false;
+  return target.protocol === "https:" || isPrivateOrigin(siteOrigin);
 }
 
-// Only the site's own URLs follow redirects. Those can't be stopped from reaching a private
-// host, so for a public site such a response is thrown away unread.
+// Only the site's own URLs follow redirects. The declarativeNetRequest rules stop hops to private
+// addresses but not to a public name that resolves to one, so a public site's response must also
+// end somewhere its page could have linked to.
 function redirectPolicy(url: string, siteOrigin: string): RequestRedirect {
   return new URL(url).origin === siteOrigin ? "follow" : "error";
 }
 
-function landedOnPrivateNetwork(finalUrl: string, siteOrigin: string): boolean {
-  return (
-    !isPrivateNetworkHost(new URL(siteOrigin).hostname) &&
-    isPrivateNetworkHost(new URL(finalUrl).hostname)
-  );
+function isPermittedLanding(finalUrl: string, siteOrigin: string): boolean {
+  return isPrivateOrigin(siteOrigin) || isPermittedIconUrl(finalUrl, siteOrigin);
 }
 
 async function get<Body>(
@@ -140,6 +144,7 @@ async function get<Body>(
   read: BodyReader<Body>,
   timeoutMs = REQUEST_TIMEOUT_MS,
 ): Promise<DownloadResult<Body>> {
+  if (!isPermittedIconUrl(url, siteOrigin)) return "failed";
   let response: Response;
   try {
     response = await fetchImpl(url, {
@@ -153,7 +158,7 @@ async function get<Body>(
     return "unreachable";
   }
   const finalUrl = response.url || url;
-  if (!response.ok || landedOnPrivateNetwork(finalUrl, siteOrigin)) {
+  if (!response.ok || !isPermittedLanding(finalUrl, siteOrigin)) {
     response.body?.cancel().catch(() => undefined);
     return "failed";
   }
@@ -168,7 +173,6 @@ async function fetchManifestIcons(
   manifestUrl: string,
   origin: string,
 ): Promise<IconCandidate[]> {
-  if (!isPermittedIconUrl(manifestUrl, origin)) return [];
   const manifest = await get(
     fetchImpl,
     manifestUrl,
@@ -291,7 +295,7 @@ export async function fetchBestIcon(origin: string, fetchImpl: Fetch = fetch): P
       "image/*",
       readCapped(IMAGE_BYTE_LIMIT),
     );
-    if (typeof download === "string" || download.type.includes("html")) continue;
+    if (typeof download === "string") continue;
     const icon = await normalizeIcon(download.body, download.type);
     if (icon && icon.sourceSize > (best?.sourceSize ?? 0)) best = icon;
     if (best && best.sourceSize >= GOOD_ENOUGH_SIZE) break;

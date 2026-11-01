@@ -61,9 +61,10 @@ export class FakeSites {
     });
   }
 
+  /** Redirects every path to the same path under `target`, which may have a path of its own. */
   addRedirect(hostname: string, target: string): Promise<string> {
     return this.listen(hostname, (path, response) => {
-      response.writeHead(302, { location: new URL(path, target).href }).end();
+      response.writeHead(302, { location: new URL(path.slice(1), target).href }).end();
     });
   }
 

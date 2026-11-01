@@ -18,9 +18,22 @@ function pngSize(view: DataView, offset: number): ImageSize | null {
   return { width: view.getUint32(offset + 16), height: view.getUint32(offset + 20) };
 }
 
-function gifSize(view: DataView): ImageSize | null {
-  if (view.byteLength < 10) return null;
-  return { width: view.getUint16(6, true), height: view.getUint16(8, true) };
+// Chromium widens the canvas to fit the first frame, wherever the logical screen ends.
+function gifSize(bytes: Uint8Array, view: DataView): ImageSize | null {
+  if (view.byteLength < 13) return null;
+  const flags = view.getUint8(10);
+  let offset = 13 + (flags & 0x80 ? 3 << ((flags & 7) + 1) : 0);
+  while (bytes[offset] === 0x21) {
+    offset += 2;
+    while ((bytes[offset] ?? 0) > 0) offset += (bytes[offset] ?? 0) + 1;
+    offset++;
+  }
+  if (bytes[offset] !== 0x2c || view.byteLength < offset + 9) return null;
+  const frame = (field: number) => view.getUint16(offset + field, true);
+  return {
+    width: Math.max(view.getUint16(6, true), frame(1) + frame(5)),
+    height: Math.max(view.getUint16(8, true), frame(3) + frame(7)),
+  };
 }
 
 // The header of a bitmap, after a BMP file's 14-byte file header or on its own inside an ICO.
@@ -72,6 +85,11 @@ function jpegSize(bytes: Uint8Array, view: DataView): ImageSize | null {
       offset++;
       continue;
     }
+    // libjpeg reads these without a length: reading one here would land on a different frame.
+    if (marker === 0x00 || marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) {
+      offset += 2;
+      continue;
+    }
     const length = view.getUint16(offset + 2);
     if (length < 2) return null;
     offset += 2 + length;
@@ -106,7 +124,7 @@ export function imageSize(bytes: Uint8Array<ArrayBuffer>): ImageSize | null {
     return icoSize(bytes, view);
   }
   const signature = fourCharacterCode(bytes, 0);
-  if (signature === "GIF8") return gifSize(view);
+  if (signature === "GIF8") return gifSize(bytes, view);
   if (signature === "RIFF" && fourCharacterCode(bytes, 8) === "WEBP") return webpSize(bytes, view);
   if (signature.startsWith("BM")) return dibSize(view, 14);
   return null;

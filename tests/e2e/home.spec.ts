@@ -62,6 +62,117 @@ test.describe("favourites", () => {
     await newTab.getByRole("button", { name: "Done" }).click();
     await expect(newTab.getByRole("button", { name: "Edit" })).toBeVisible();
   });
+
+  test("says where a moved favourite went", async ({ newTab }) => {
+    await pin(newTab, /^Outdoors/, "Trail map");
+    await pin(newTab, /^Work/, "Jira board");
+    await newTab.getByRole("button", { name: "Home", exact: true }).click();
+    await newTab.getByRole("button", { name: "Edit" }).click();
+    await newTab.getByRole("button", { name: "Move Trail map later" }).click();
+    await expect(newTab.locator("#announcer")).toHaveText("Trail map moved to position 2 of 2.");
+  });
+
+  test("stops editing on leaving Home", async ({ newTab }) => {
+    await pin(newTab, /^Outdoors/, "Trail map");
+    await pin(newTab, /^Work/, "Jira board");
+    await newTab.getByRole("button", { name: "Home", exact: true }).click();
+    await newTab.getByRole("button", { name: "Edit" }).click();
+
+    await newTab.getByRole("button", { name: /^Work/ }).click();
+    await newTab.getByRole("button", { name: "Home", exact: true }).click();
+    await expect(newTab.getByRole("button", { name: "Edit" })).toBeVisible();
+    await expect(newTab.getByRole("button", { name: "Done" })).toHaveCount(0);
+  });
+});
+
+test.describe("favourites across tabs", () => {
+  test("keeps both pins when two tabs pin at the same moment", async ({
+    newTab,
+    context,
+    newTabUrl,
+  }) => {
+    const other = await context.newPage();
+    await other.goto(newTabUrl);
+    await newTab.getByRole("button", { name: /^Outdoors/ }).click();
+    await other.getByRole("button", { name: /^Work/ }).click();
+
+    // Dispatched, not clicked: the first pin re-renders the other tab, which can swallow a real
+    // click that lands in the same frame.
+    await Promise.all([
+      newTab.getByRole("button", { name: "Pin Trail map to Home" }).dispatchEvent("click"),
+      other.getByRole("button", { name: "Pin Jira board to Home" }).dispatchEvent("click"),
+    ]);
+    await newTab.getByRole("button", { name: "Home", exact: true }).click();
+    await expect
+      .poll(async () => (await favouriteTitles(newTab)).sort())
+      .toEqual(["Jira board", "Trail map"]);
+  });
+
+  test("shows visits made in another tab under Frequent", async ({
+    context,
+    newTab,
+    newTabUrl,
+    serviceWorker,
+  }) => {
+    await serviceWorker.evaluate(() =>
+      chrome.storage.local.set({
+        settings: {
+          focusSearchOnOpen: false,
+          home: { source: "frequent", folderId: null, showFrequent: true },
+        },
+      }),
+    );
+    const other = await context.newPage();
+    await other.goto(newTabUrl);
+    await expect(other.getByRole("main").getByRole("heading", { level: 2 })).toHaveText(
+      "Recently added",
+    );
+
+    await newTab.getByRole("button", { name: /^Reading/ }).click();
+    await newTab
+      .getByRole("link", { name: /Data handbook/ })
+      .click({ modifiers: ["ControlOrMeta"] });
+    await newTab.waitForTimeout(300);
+    await expect(other.getByRole("main").getByRole("heading", { level: 2 })).toHaveText(
+      "Recently added",
+    );
+
+    // Playwright keeps every page visible, so switching back to the tab is played out by hand.
+    await other.evaluate(() => {
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    await expect(other.getByRole("main").getByRole("heading", { level: 2 })).toHaveText("Frequent");
+    await expect(other.locator("#panel .link-card__title").first()).toHaveText("Data handbook");
+  });
+});
+
+test.describe("frequent links", () => {
+  test("stay in place while links are opened in the background, by mouse or keyboard", async ({
+    newTab,
+    serviceWorker,
+  }) => {
+    const cards = newTab.locator("#panel .link-grid:not([data-favourites]) .link-card");
+    const titles = () => cards.locator(".link-card__title").allTextContents();
+    const before = await titles();
+    const aimedAt = await Promise.all(
+      [3, 4, 5].map((index) => cards.nth(index).getAttribute("data-bookmark-url")),
+    );
+
+    await cards.nth(3).click({ button: "middle" });
+    await cards.nth(4).click({ button: "middle" });
+    await cards.nth(5).focus();
+    await newTab.keyboard.press("ControlOrMeta+Enter");
+    await expect
+      .poll(() =>
+        serviceWorker.evaluate(async () => {
+          const { usage } = await chrome.storage.local.get("usage");
+          return Object.keys(usage ?? {}).sort();
+        }),
+      )
+      .toEqual(aimedAt.sort());
+    await newTab.waitForTimeout(500);
+    expect(await titles()).toEqual(before);
+  });
 });
 
 test.describe("favourites when a pinned bookmark is deleted", () => {

@@ -10,7 +10,7 @@ export default defineConfig({
   build: {
     outDir: fromRoot("dist"),
     emptyOutDir: true,
-    target: "chrome120",
+    target: "chrome137",
     modulePreload: { polyfill: false },
     // The CSP allows no data: images, so nothing may be inlined as one.
     assetsInlineLimit: 0,
@@ -32,13 +32,17 @@ export default defineConfig({
   },
   test: {
     root: ".",
-    include: ["src/**/*.test.ts"],
+    include: ["tests/unit/**/*.test.ts"],
     environment: "happy-dom",
+    setupFiles: ["tests/unit/fixtures/web-locks.ts"],
+    restoreMocks: true,
+    unstubGlobals: true,
+    unstubEnvs: true,
     coverage: {
       provider: "v8",
       reporter: ["text-summary"],
       include: ["src/**/*.ts"],
-      exclude: ["src/**/*.test.ts", "src/test/**", "src/wallpaper/timezone-coordinates.ts"],
+      exclude: ["src/wallpaper/timezone-coordinates.ts"],
       thresholds: {
         lines: 90,
         branches: 80,

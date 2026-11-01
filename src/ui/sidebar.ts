@@ -37,8 +37,15 @@ function sidebarButton(
     },
     [
       leading,
-      h("span", { className: "sidebar__label", text: label }),
-      count !== undefined && h("span", { className: "sidebar__count", text: String(count) }),
+      h("span", { className: "sidebar__label", text: label, attributes: { dir: "auto" } }),
+      count !== undefined &&
+        h("span", { className: "sidebar__count" }, [
+          String(count),
+          h("span", {
+            className: "visually-hidden",
+            text: count === 1 ? " bookmark" : " bookmarks",
+          }),
+        ]),
     ],
   );
   button.addEventListener("click", onClick);
@@ -86,7 +93,7 @@ export function renderSidebar(root: HTMLElement, props: SidebarProps): void {
   // Re-rendering replaces the buttons; keep keyboard focus where it was.
   if (focusedKey !== undefined) {
     const focused = [home, ...folders, more].find((button) => button.dataset.key === focusedKey);
-    focused?.focus({ preventScroll: true });
+    (focused ?? home).focus({ preventScroll: true });
   }
 
   const updateOverflow = () => {
