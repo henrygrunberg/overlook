@@ -589,6 +589,29 @@ describe("normalizeIcon", () => {
     expect(await normalizeIcon(bytes, "image/png")).toMatchObject({ fullBleed: true });
   });
 
+  // The stored canvas is 128px; a shape as a test of each pixel on it.
+  const roundedSquare = (radius: number) => (x: number, y: number) => {
+    const dx = Math.max(radius - x, x - (127 - radius), 0);
+    const dy = Math.max(radius - y, y - (127 - radius), 0);
+    return dx * dx + dy * dy > radius * radius;
+  };
+  const circle = (x: number, y: number) => (x - 63.5) ** 2 + (y - 63.5) ** 2 > 64 ** 2;
+
+  it.each([
+    ["slightly rounded", 12],
+    ["app-style rounded", 28],
+    ["very rounded", 46],
+  ])("lets a %s square icon fill the tile", async (_label, radius) => {
+    const isTransparent = roundedSquare(radius);
+    stubDecoder({ width: 64, height: 64, alphaAt: (x, y) => (isTransparent(x, y) ? 0 : 255) });
+    expect(await normalizeIcon(bytes, "image/png")).toMatchObject({ fullBleed: true });
+  });
+
+  it("centres a round logo", async () => {
+    stubDecoder({ width: 64, height: 64, alphaAt: (x, y) => (circle(x, y) ? 0 : 255) });
+    expect(await normalizeIcon(bytes, "image/png")).toMatchObject({ fullBleed: false });
+  });
+
   it.each([
     ["top left", (x: number, y: number) => x < 64 && y < 64],
     ["top right", (x: number, y: number) => x >= 64 && y < 64],

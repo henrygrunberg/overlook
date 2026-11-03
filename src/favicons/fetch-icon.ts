@@ -242,13 +242,34 @@ export async function discoverIcons(
   );
 }
 
-function hasOpaqueCorners(context: OffscreenCanvasRenderingContext2D): boolean {
+// A square icon, or an app icon whose own corners are rounded, fills the tile; a logo on a
+// transparent background (or a round one) is centred on the tile instead. The rounded case is
+// opaque a quarter of the way along each edge, where a circle isn't.
+function fillsTile(context: OffscreenCanvasRenderingContext2D): boolean {
   const { width: size } = context.canvas;
   const near = Math.round(size * 0.04);
   const far = size - 1 - near;
+  const quarter = Math.round(size * 0.25);
+  const threeQuarters = size - 1 - quarter;
   const { data } = context.getImageData(0, 0, size, size);
-  const isOpaque = (x: number, y: number) => (data[(y * size + x) * 4 + 3] ?? 0) > 250;
-  return isOpaque(near, near) && isOpaque(far, near) && isOpaque(near, far) && isOpaque(far, far);
+  const isOpaque = ([x, y]: readonly [number, number]) => (data[(y * size + x) * 4 + 3] ?? 0) > 250;
+  const corners = [
+    [near, near],
+    [far, near],
+    [near, far],
+    [far, far],
+  ] as const;
+  const alongEdges = [
+    [quarter, near],
+    [threeQuarters, near],
+    [quarter, far],
+    [threeQuarters, far],
+    [near, quarter],
+    [near, threeQuarters],
+    [far, quarter],
+    [far, threeQuarters],
+  ] as const;
+  return corners.every(isOpaque) || alongEdges.every(isOpaque);
 }
 
 function hasUsableSize({ width, height }: ImageBitmap): boolean {
@@ -293,7 +314,7 @@ export async function normalizeIcon(
   if (!context) return null;
   return {
     image: await context.canvas.convertToBlob({ type: "image/png" }),
-    fullBleed: hasOpaqueCorners(context),
+    fullBleed: fillsTile(context),
     sourceSize,
   };
 }

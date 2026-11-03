@@ -72,6 +72,9 @@ test.describe("site icons", () => {
     const tile = cardTile(newTab, "Local app");
     await expect(tile.locator("img")).toHaveAttribute("src", /^blob:/);
     await expect(tile).toHaveClass(/favicon-tile--full-bleed/);
+    // Nothing light may show at the clipped corners of an icon that fills the tile.
+    await expect(tile).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
+    await expect(tile).toHaveCSS("box-shadow", /^rgba\(0, 0, 0, 0\.15\) 0px 2px 6px 0px$/);
     expect(requestsFor(fakeSites, url, "/touch.png")).toHaveLength(1);
 
     await newTab.reload();
@@ -154,6 +157,18 @@ test.describe("site icons", () => {
     const tile = cardTile(newTab, "Transparent");
     await expect(tile.locator("img")).toHaveAttribute("src", /^blob:/);
     await expect(tile).not.toHaveClass(/favicon-tile--full-bleed/);
+  });
+
+  test("lets an app icon with rounded corners fill the tile", async ({ newTab, fakeSites }) => {
+    const url = await fakeSites.add({
+      html: '<head><link rel="apple-touch-icon" href="/app.png"></head>',
+      files: { "/app.png": solidPng(192, [232, 86, 42, 255], 42) },
+    });
+    await seedBookmarks(newTab, [{ title: "Rounded app", url }]);
+
+    const tile = cardTile(newTab, "Rounded app");
+    await expect(tile.locator("img")).toHaveAttribute("src", /^blob:/);
+    await expect(tile).toHaveClass(/favicon-tile--full-bleed/);
   });
 
   test("never follows a page's icon link to another private-network host", async ({

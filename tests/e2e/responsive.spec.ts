@@ -156,6 +156,8 @@ for (const wideFont of [false, true]) {
     });
 
     test("search results and settings stay inside the window", async ({ newTab }) => {
+      // The widest clock reaches furthest towards the Settings button in a narrow window.
+      await openWithWidestClock(newTab);
       await addBookmarksMatching(newTab, "Acme report", 12);
       const listbox = newTab.locator(".spotlight__listbox");
       for (const size of [

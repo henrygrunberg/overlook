@@ -2,7 +2,12 @@ import { createServer, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { crc32, deflateSync } from "node:zlib";
 
-export function solidPng(size: number, rgba: readonly [number, number, number, number]): Buffer {
+/** A square of one colour; with a corner radius, transparent outside its rounded corners. */
+export function solidPng(
+  size: number,
+  rgba: readonly [number, number, number, number],
+  cornerRadius = 0,
+): Buffer {
   const chunk = (type: string, data: Buffer) => {
     const length = Buffer.alloc(4);
     length.writeUInt32BE(data.length);
@@ -15,11 +20,21 @@ export function solidPng(size: number, rgba: readonly [number, number, number, n
   header.writeUInt32BE(size, 0);
   header.writeUInt32BE(size, 4);
   header.set([8, 6, 0, 0, 0], 8);
-  const row = Buffer.concat([Buffer.from([0]), Buffer.from(Array(size).fill(rgba).flat())]);
+  const isInside = (x: number, y: number) => {
+    const dx = Math.max(cornerRadius - x, x - (size - 1 - cornerRadius), 0);
+    const dy = Math.max(cornerRadius - y, y - (size - 1 - cornerRadius), 0);
+    return dx * dx + dy * dy <= cornerRadius * cornerRadius;
+  };
+  const rows = Array.from({ length: size }, (_, y) =>
+    Buffer.from([
+      0,
+      ...Array.from({ length: size }, (_, x) => (isInside(x, y) ? rgba : [0, 0, 0, 0])).flat(),
+    ]),
+  );
   return Buffer.concat([
     Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
     chunk("IHDR", header),
-    chunk("IDAT", deflateSync(Buffer.concat(Array<Buffer>(size).fill(row)))),
+    chunk("IDAT", deflateSync(Buffer.concat(rows))),
     chunk("IEND", Buffer.alloc(0)),
   ]);
 }
